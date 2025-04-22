@@ -1,0 +1,5 @@
+# keep this directory around for the UCI engine binary
+!.gitkeep
+
+# ignore everything else in here
+*
