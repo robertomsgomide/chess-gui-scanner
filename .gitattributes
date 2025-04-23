@@ -1,0 +1,42 @@
+# Set default behavior to automatically normalize line endings
+* text=auto
+
+# Python source files
+*.py text diff=python
+*.pyw text diff=python
+
+# Configuration files
+*.json text
+*.txt text
+*.md text
+*.ini text
+*.cfg text
+
+# UI files
+*.ui text
+
+# Binary files that should not be modified
+*.pkl binary
+*.pt binary
+*.pyc binary
+*.pyd binary
+*.pyo binary
+
+# Image files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+
+# Explicitly declare files that should have specific line endings
+# Scripts should have LF endings, even on Windows
+*.sh text eol=lf
+
+# Windows-specific scripts should retain CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Force checkout with LF for specific text files
+requirements.txt text eol=lf
