@@ -9,7 +9,7 @@ A PyQt5-based desktop application that **captures chessboards from your screen, 
 | Feature | Details |
 |---------|---------|
 | **Screen Capture** | Full-screen overlay with 8×8 grid for precise board selection |
-| **Piece Recognition** | Convolutional neural network (≈0.85M parameters) identifies pieces from screenshots |
+| **Piece Recognition** | Convolutional neural network (~0.85M parameters) identifies pieces from screenshots |
 | **Position Analysis** | Uses both heuristics and machine learning to predict board orientation and side to move |
 | **Advanced Board Editor** | Intuitive interface with drag-and-drop, piece memory, castling rights and en passant detection |
 | **Self-Improving AI** | Learns from your corrections to improve future recognition accuracy |
@@ -51,6 +51,7 @@ python main.py
 - PyTorch & torchvision
 - Pillow
 - pyautogui
+- numpy
 
 ---
 
@@ -58,7 +59,7 @@ python main.py
 
 1. **Capture** - Use the screen overlay to select any chessboard visible on your screen
 2. **Recognize** - The CNN classifies each square and predicts the board's orientation
-3. **Edit** - Make corrections with these intuitive tools:
+3. **Edit** - Make corrections with intuitive tools:
    - Drag pieces from the palette or right-click to clear squares
    - Double-click pieces for "sticky" placement mode
    - Automatic castling rights detection based on king and rook positions
