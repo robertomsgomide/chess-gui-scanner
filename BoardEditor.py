@@ -10,7 +10,7 @@ from PyQt5.QtGui import QIcon, QCursor
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QLabel,
     QVBoxLayout, QDialog, QGridLayout, QMessageBox, QHBoxLayout,
-    QCheckBox, QRadioButton, QButtonGroup, QTextEdit, QWhatsThis, QAction
+    QCheckBox, QRadioButton, QButtonGroup, QTextEdit, QWhatsThis, QAction, QMenu, QFileDialog, QSizePolicy
 )
 
 
@@ -54,6 +54,7 @@ class BoardEditor(QDialog):
 • <i>Flip Board</i> changes the point of view.<br>
 • <i>Copy FEN</i> copies the current position to the clipboard.<br>
 • <i>Analysis</i> runs engine on the position.<br>
+• Click the ▼ button next to Analysis to select different chess engines.<br>
 • <i>Undo</i> restores the previous board position.<br>
 • <i>Redo</i> restores a previously undone position.<br>
 • Use the castling checkboxes to control O-O and O-O-O rights.<br>
@@ -227,9 +228,39 @@ class BoardEditor(QDialog):
 
         # analysis column
         right = QVBoxLayout(); outer.addLayout(right)
-        self.analysis_btn = QPushButton("Analysis"); self.analysis_btn.setIcon(QIcon(cengine_path))
+        
+        # Create analysis button group with dropdown
+        analysis_container = QWidget()
+        analysis_layout = QHBoxLayout(analysis_container)
+        analysis_layout.setContentsMargins(0, 0, 0, 0)
+        analysis_layout.setSpacing(0)
+        
+        # Main Analysis button
+        self.analysis_btn = QPushButton("Analysis")
+        self.analysis_btn.setIcon(QIcon(cengine_path))
         self.analysis_btn.clicked.connect(self.on_analysis)
-        right.addWidget(self.analysis_btn)
+        
+        # Dropdown button for engine selection
+        self.engine_dropdown_btn = QPushButton("▼")
+        self.engine_dropdown_btn.setMaximumWidth(20)  # Make dropdown button narrow
+        
+        # Ensure the dropdown button has the same height and styling as the Analysis button
+        self.engine_dropdown_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.engine_dropdown_btn.setFixedHeight(self.analysis_btn.sizeHint().height())
+        self.engine_dropdown_btn.setStyleSheet("QPushButton { padding: 0px; }")
+        
+        self.engine_dropdown_btn.clicked.connect(self.show_engine_menu)
+        
+        # Add buttons to container
+        analysis_layout.addWidget(self.analysis_btn, 1)  # Main button takes most space
+        analysis_layout.addWidget(self.engine_dropdown_btn, 0)  # Dropdown is small
+        
+        # Add container to layout
+        right.addWidget(analysis_container)
+        
+        # Variable to store the selected engine
+        self.selected_engine = None
+        
         self.analysis_view = QTextEdit(); self.analysis_view.setReadOnly(True)
         self.analysis_view.setPlaceholderText("Engine lines will appear here")
         self.analysis_view.setFixedWidth(280)
@@ -463,29 +494,216 @@ class BoardEditor(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Invalid FEN", f"Could not parse FEN: {str(e)}")
 
+    def show_engine_menu(self):
+        """Display a popup menu with available UCI engines"""
+        # Find all engines in the engine folder
+        engine_dir = os.path.join(os.path.dirname(__file__), "engine")
+        engine_menu = QMenu(self)
+        
+        try:
+            if os.path.exists(engine_dir):
+                engines = []
+                
+                # Find executables on Windows (recursively search in subdirectories)
+                if sys.platform.startswith("win"):
+                    for root, dirs, files in os.walk(engine_dir):
+                        for file in files:
+                            if file.lower().endswith(".exe"):
+                                # Get path relative to engine directory for display
+                                rel_path = os.path.relpath(os.path.join(root, file), engine_dir)
+                                engines.append(rel_path)
+                # Find executables on macOS/Linux (recursively)
+                else:
+                    for root, dirs, files in os.walk(engine_dir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            if os.path.isfile(file_path) and os.access(file_path, os.X_OK):
+                                rel_path = os.path.relpath(file_path, engine_dir)
+                                engines.append(rel_path)
+                
+                if engines:
+                    # Create menu items for each engine
+                    for engine in engines:
+                        # Format display name - use just filename for top-level, show path for subdirectories
+                        if os.path.sep in engine:
+                            display_name = engine  # Show full relative path for nested engines
+                        else:
+                            display_name = engine  # Just filename for top level engines
+                            
+                        action = engine_menu.addAction(display_name)
+                        action.triggered.connect(lambda checked, e=engine: self.select_engine(e))
+                else:
+                    # No engines found
+                    no_engine_action = engine_menu.addAction("No engines found")
+                    no_engine_action.setEnabled(False)
+                    
+                    # Add option to add a new engine
+                    engine_menu.addSeparator()
+                    add_engine_action = engine_menu.addAction("Add engine...")
+                    add_engine_action.triggered.connect(self.add_engine)
+            else:
+                # Engine directory doesn't exist
+                no_dir_action = engine_menu.addAction("Engine directory not found")
+                no_dir_action.setEnabled(False)
+                
+                # Add option to create directory and add engine
+                engine_menu.addSeparator()
+                create_dir_action = engine_menu.addAction("Create engine directory")
+                create_dir_action.triggered.connect(self.create_engine_directory)
+        except Exception as e:
+            # Error occurred
+            error_action = engine_menu.addAction(f"Error: {str(e)}")
+            error_action.setEnabled(False)
+        
+        # Show the menu
+        pos = self.engine_dropdown_btn.mapToGlobal(self.engine_dropdown_btn.rect().bottomLeft())
+        engine_menu.exec_(pos)
+    
+    def select_engine(self, engine_name):
+        """Set the selected engine"""
+        # Store the engine name
+        self.selected_engine = engine_name
+        
+        # Update the analysis button text to show selected engine
+        # For engines in subdirectories, just show the filename without extension
+        if os.path.sep in engine_name:
+            # For nested engines, just show the filename
+            display_name = os.path.basename(engine_name)
+            display_name = os.path.splitext(display_name)[0]
+        else:
+            # For top level engines
+            display_name = os.path.splitext(engine_name)[0]
+            
+        self.analysis_btn.setText(f"Analysis ({display_name})")
+        
+        # Test if the engine can be initialized properly
+        engine_dir = os.path.join(os.path.dirname(__file__), "engine")
+        engine_path = os.path.join(engine_dir, engine_name)
+        
+        if not self.test_engine_compatibility(engine_path):
+            # If there's a problem, show a warning but still allow selection
+            QMessageBox.warning(
+                self, 
+                "Engine Warning", 
+                f"The engine '{display_name}' may not be compatible or may have issues.\n"
+                "It will remain selected, but may fail during analysis."
+            )
+            
+    def test_engine_compatibility(self, engine_path):
+        """Test if an engine can be properly initialized"""
+        try:
+            # Attempt to start the engine with a short timeout
+            engine = chess.engine.SimpleEngine.popen_uci(engine_path, timeout=2.0)
+            # If successful, close it properly
+            engine.quit()
+            return True
+        except Exception as e:
+            print(f"Engine compatibility test failed: {str(e)}")
+            return False
+
+    def add_engine(self):
+        """Open a file dialog to select an engine executable"""
+        file_dialog = QFileDialog()
+        file_dialog.setFileMode(QFileDialog.ExistingFile)
+        
+        if sys.platform.startswith("win"):
+            file_dialog.setNameFilter("Executable files (*.exe)")
+        else:
+            file_dialog.setNameFilter("All files (*)")
+        
+        if file_dialog.exec_():
+            selected_files = file_dialog.selectedFiles()
+            if selected_files:
+                source_path = selected_files[0]
+                engine_name = os.path.basename(source_path)
+                
+                # Create engine directory if it doesn't exist
+                engine_dir = os.path.join(os.path.dirname(__file__), "engine")
+                os.makedirs(engine_dir, exist_ok=True)
+                
+                # Copy the engine to the engine directory
+                destination_path = os.path.join(engine_dir, engine_name)
+                try:
+                    import shutil
+                    shutil.copy2(source_path, destination_path)
+                    
+                    # Make it executable on Unix systems
+                    if not sys.platform.startswith("win"):
+                        os.chmod(destination_path, os.stat(destination_path).st_mode | 0o111)
+                    
+                    # Select the newly added engine
+                    self.select_engine(engine_name)
+                    QMessageBox.information(self, "Engine Added", f"Engine '{engine_name}' added successfully.")
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to add engine: {str(e)}")
+    
+    def create_engine_directory(self):
+        """Create the engine directory and prompt to add an engine"""
+        engine_dir = os.path.join(os.path.dirname(__file__), "engine")
+        try:
+            os.makedirs(engine_dir, exist_ok=True)
+            QMessageBox.information(self, "Directory Created", "Engine directory created. Now you can add an engine.")
+            self.add_engine()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to create engine directory: {str(e)}")
+
     def on_analysis(self):
         """
         Runs UCI engine at depth 20 and shows the top-3 PVs.
         """
+        # Display "Analyzing..." in the analysis view to show activity
+        self.analysis_view.setPlainText("Analyzing...")
+        
         # find any engine in ./engine
         engine_dir = os.path.join(os.path.dirname(__file__), "engine")
         try:
-            if sys.platform.startswith("win"):
-                # pick first .exe on Windows
-                name = next(f for f in os.listdir(engine_dir) if f.lower().endswith(".exe"))
-            else:
-                # pick first file with +x bit on macOS/Linux
-                name = next(f for f in os.listdir(engine_dir)
-                            if os.path.isfile(os.path.join(engine_dir, f))
-                            and os.access(os.path.join(engine_dir, f), os.X_OK))
+            engine_name = None
+            
+            # Use selected engine if available
+            if self.selected_engine:
+                engine_path = os.path.join(engine_dir, self.selected_engine)
+                if os.path.exists(engine_path):
+                    engine_name = self.selected_engine
+            
+            # If no engine is selected or the selected engine doesn't exist, find any available engine
+            if not engine_name:
+                # Search recursively in all subdirectories
+                for root, dirs, files in os.walk(engine_dir):
+                    if engine_name:
+                        break  # Stop once we found an engine
+                        
+                    if sys.platform.startswith("win"):
+                        # Look for .exe files on Windows
+                        for file in files:
+                            if file.lower().endswith(".exe"):
+                                # Get path relative to engine directory
+                                engine_name = os.path.relpath(os.path.join(root, file), engine_dir)
+                                break
+                    else:
+                        # Look for executable files on Unix
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            if os.path.isfile(file_path) and os.access(file_path, os.X_OK):
+                                engine_name = os.path.relpath(file_path, engine_dir)
+                                break
+                
+                if engine_name:
+                    # Update the selected engine
+                    self.select_engine(engine_name)
+                else:
+                    raise FileNotFoundError("No engine found in any subdirectory")
+                    
         except (StopIteration, FileNotFoundError):
             QMessageBox.critical(
                 self, "Engine not found",
-                f"No UCI engine executable found in:\n  {engine_dir}\n\n"
-                "Please drop a single engine binary there (e.g. stockfish[.exe])."
+                f"No UCI engine executable found in:\n  {engine_dir} or its subdirectories\n\n"
+                "Please add a chess engine (e.g. stockfish.exe) using the dropdown menu."
             )
+            self.analysis_view.setPlainText("No engine available")
             return
-        ANALYSIS_ENGINE_PATH = os.path.join(engine_dir, name)
+        
+        ANALYSIS_ENGINE_PATH = os.path.join(engine_dir, engine_name)
+        
         # build a FEN that matches the user's coordinate view
         self.sync_squares_to_labels()
         board_copy = [row[:] for row in self.labels_2d]
@@ -504,38 +722,66 @@ class BoardEditor(QDialog):
 
         # fire up the engine
         try:
-            engine = chess.engine.SimpleEngine.popen_uci(ANALYSIS_ENGINE_PATH)
-        except FileNotFoundError:
+            # Show a busy cursor during analysis
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            
+            # Use a longer timeout for potentially slow engines
+            engine = chess.engine.SimpleEngine.popen_uci(ANALYSIS_ENGINE_PATH, timeout=10.0)
+            
+            board = chess.Board(fen)
+
+            # Set a maximum time limit to prevent hanging on problematic engines
+            try:
+                info = engine.analyse(
+                    board,
+                    chess.engine.Limit(depth=20, time=10.0),  # Add time limit of 10 seconds
+                    multipv=3
+                )
+                
+                # build a nice text block
+                lines = []
+                for i, pv in enumerate(info, 1):
+                    score = pv["score"].white()  # always from white's viewpoint
+                    if score.is_mate():
+                        score_str = f"# {score.mate()}"
+                    else:
+                        score_str = f"{score.score()/100:.2f}"
+                    san_line = board.variation_san(pv["pv"])
+                    lines.append(f"{i}.  {score_str}  |  {san_line}")
+
+                self.analysis_view.setPlainText("\n".join(lines))
+                
+            except chess.engine.EngineError as e:
+                QMessageBox.critical(self, "Engine analysis error", str(e))
+                self.analysis_view.setPlainText(f"Engine error: {str(e)}\n\nTry a different engine.")
+                
+            # Always make sure to quit the engine
+            try:
+                engine.quit()
+            except Exception:
+                # If engine already crashed, we may not be able to quit properly
+                pass
+                
+        except chess.engine.EngineTerminatedError as e:
             QMessageBox.critical(
-                self, "Engine not found",
-                f"Could not start engine at:\n{ANALYSIS_ENGINE_PATH}"
+                self, "Engine crash",
+                f"The engine '{os.path.splitext(engine_name)[0]}' crashed unexpectedly.\n\n"
+                f"Error: {str(e)}\n\n"
+                "Try selecting a different engine."
             )
-            return
-
-        board = chess.Board(fen)
-
-        try:
-            info = engine.analyse(board,
-                                chess.engine.Limit(depth=20),
-                                multipv=3)
-        except chess.engine.EngineError as e:
-            QMessageBox.critical(self, "Engine error", str(e))
-            engine.quit()
-            return
-
-        # build a nice text block
-        lines = []
-        for i, pv in enumerate(info, 1):
-            score = pv["score"].white()  # always from white's viewpoint
-            if score.is_mate():
-                score_str = f"# {score.mate()}"
-            else:
-                score_str = f"{score.score()/100:.2f}"
-            san_line = board.variation_san(pv["pv"])
-            lines.append(f"{i}.  {score_str}  |  {san_line}")
-
-        engine.quit()
-        self.analysis_view.setPlainText("\n".join(lines))
+            self.analysis_view.setPlainText(f"Engine crashed. Try a different engine.")
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Engine error",
+                f"Error running engine: {str(e)}"
+            )
+            self.analysis_view.setPlainText(f"Error: {str(e)}")
+            
+        finally:
+            # Always restore cursor
+            QApplication.restoreOverrideCursor()
+            
         self.analysis_view.moveCursor(self.analysis_view.textCursor().Start)
 
     def get_final_labels_2d(self):
