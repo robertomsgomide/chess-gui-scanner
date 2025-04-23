@@ -1,0 +1,6 @@
+python-chess
+PyQt5
+pyautogui
+torch
+torchvision
+Pillow
