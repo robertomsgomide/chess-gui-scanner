@@ -101,5 +101,6 @@ All training data is saved locally, allowing the model to improve with each use 
 
 ## License
 
-Code released under the **MIT License**.  
-Chess piece icons CC BY-SA 3.0 from Wikimedia Commons.
+- **Code License**: This project's code is licensed under the [MIT License](LICENSE).
+- **Usage Terms**: By using this application, you agree to our [Terms of Use](TERMS_OF_USE.md), which prohibit using this tool for cheating in chess games.
+- Chess piece icons CC BY-SA 3.0 from Wikimedia Commons.
