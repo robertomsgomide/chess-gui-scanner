@@ -121,6 +121,9 @@ class BoardSquareWidget(QWidget):
                 self.update()
                 if self.board_editor:               # keep FEN in sync, etc.
                     self.board_editor.sync_squares_to_labels()
+                    # Save state after erasing a piece
+                    if hasattr(self.board_editor, 'save_state'):
+                        self.board_editor.save_state()
             return  # stop; no drag on right click
             
         # If left-clicking on a board square and we have a remembered piece, place it
@@ -133,6 +136,9 @@ class BoardSquareWidget(QWidget):
             self.update()
             if self.board_editor:
                 self.board_editor.sync_squares_to_labels()
+                # Save state after placing a remembered piece
+                if hasattr(self.board_editor, 'save_state'):
+                    self.board_editor.save_state()
             return
 
         # Otherwise do normal drag behavior
@@ -215,5 +221,9 @@ class BoardSquareWidget(QWidget):
 
         # keep BoardEditor's 2‑D state in sync for FEN, flips, etc.
         self.board_editor.sync_squares_to_labels()
+        
+        # Save state after dragging and dropping a piece
+        if hasattr(self.board_editor, 'save_state'):
+            self.board_editor.save_state()
 
         event.acceptProposedAction()

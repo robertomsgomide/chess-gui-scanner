@@ -2,6 +2,7 @@ import os
 import sys
 import chess
 import chess.engine
+import copy
 from BoardSquareWidget import BoardSquareWidget
 from labels import (PIECE_LABELS, labels_to_fen, get_piece_pixmap)
 from PyQt5.QtCore import Qt, QEvent
@@ -33,6 +34,10 @@ class BoardEditor(QDialog):
         self.remembered_piece = None  # Currently remembered piece
         self.piece_cursor = None  # Custom cursor for remembered piece
         
+        # Initialize undo/redo history
+        self.history = []  # List to store board states
+        self.current_index = -1  # Current position in history
+        
         # Disable automatic "What's this?" on right-click
         self.setContextMenuPolicy(Qt.PreventContextMenu)
 
@@ -41,7 +46,7 @@ class BoardEditor(QDialog):
         self.help_action.triggered.connect(self.show_help)
         self.addAction(self.help_action)
 
-        # Create help button for direct access
+        # Define help text in just one place
         self.help_text = """<b>Chess Board Editor - quick help</b><br>
 • Drag pieces from the palette onto the board.<br>
 • Right-click a square to erase it.<br>
@@ -49,6 +54,8 @@ class BoardEditor(QDialog):
 • <i>Flip Board</i> changes the point of view.<br>
 • <i>Copy FEN</i> copies the current position to the clipboard.<br>
 • <i>Analysis</i> runs engine on the position.<br>
+• <i>Undo</i> restores the previous board position.<br>
+• <i>Redo</i> restores a previously undone position.<br>
 • Use the castling checkboxes to control O-O and O-O-O rights.<br>
 - They're only enabled when the king and rook are on their starting squares.<br>
 • To enable <i>en passant</i>, tick the box when a capture is available.<br>
@@ -65,6 +72,8 @@ class BoardEditor(QDialog):
         paste_path = ip("Chess_paste.png")
         bcastle_path, wcastle_path = ip("Chess_bcastle.png"), ip("Chess_wcastle.png")
         cengine_path = ip("Chess_engine.png")
+        undo_path = ip("Chess_undo.png")
+        redo_path = ip("Chess_redo.png")
 
         # internal board state
         self.labels_2d    = [row[:] for row in labels_2d]   # deep‑copy
@@ -112,7 +121,7 @@ class BoardEditor(QDialog):
         left.addWidget(grid_container)
         
         # Set fixed size to ensure proper alignment (8 squares of 60px each plus labels)
-        grid_container.setFixedSize(9*60, 10*60)
+        grid_container.setFixedSize(9*60 + 70, 10*60)  # Add 70 pixels for the Undo/Redo buttons
         
         # Make squares closer together by removing spacing
         self.grid.setSpacing(0)
@@ -142,12 +151,34 @@ class BoardEditor(QDialog):
                 self.grid.addWidget(sq, r+1, c+1)
                 row_widgets.append(sq)
             self.squares.append(row_widgets)
+        
         # file labels bottom
         for c in range(8):
             file_lbl = QLabel(self.file_labels[c]); file_lbl.setAlignment(Qt.AlignCenter)
             self.grid.addWidget(file_lbl, 9, c+1)
         # blank bottom‑left pad
         self.grid.addWidget(QLabel(""), 9, 0)
+        
+        # Add Undo/Redo buttons to the right of ranks 8 and 7
+        self.undo_btn = QPushButton("Undo"); self.undo_btn.clicked.connect(self.on_undo)
+        self.redo_btn = QPushButton("Redo"); self.redo_btn.clicked.connect(self.on_redo)
+        
+        # Set minimum width to prevent text from being cut off
+        self.undo_btn.setMinimumWidth(60)
+        self.redo_btn.setMinimumWidth(60)
+        
+        self.undo_btn.setIcon(QIcon(undo_path))
+        self.redo_btn.setIcon(QIcon(redo_path))           
+        # Initialize buttons as disabled
+        self.undo_btn.setEnabled(False)
+        self.redo_btn.setEnabled(False)
+        
+        # Add buttons to the grid - red region (rank 8) for Undo, blue region (rank 7) for Redo
+        self.grid.addWidget(self.undo_btn, 1, 9)  # row 1 = rank 8, column 9 = right of board
+        self.grid.addWidget(self.redo_btn, 2, 9)  # row 2 = rank 7, column 9 = right of board
+        
+        # Set the column stretch for the button column
+        self.grid.setColumnStretch(9, 1)
 
         # palette
         bottom_container = QWidget()
@@ -187,6 +218,7 @@ class BoardEditor(QDialog):
         self.clear_btn  = add_btn("Clear Board",  None,        self.on_clear_board)
         self.flip_btn   = add_btn("Flip Board",   flip_path,   self.on_flip_board)
         self.switch_btn = add_btn("Switch",       switch_path, self.on_switch_coords)
+        
         self.reset_btn  = add_btn("Reset",        None,        self.on_reset_to_start)
         self.copy_btn   = add_btn("Copy FEN",     clip_path,   self.on_copy_fen)
         self.paste_btn  = add_btn("Paste FEN",    paste_path,  self.on_paste_fen)
@@ -210,20 +242,12 @@ class BoardEditor(QDialog):
         
         # initialise UI‑dependent states
         self.refresh_castling_checkboxes()
-        # ? in the title‑bar
-        self.setWhatsThis(
-            "<b>Chess Board Editor - quick help</b><br>"
-            "• Drag pieces from the palette onto the board.<br>"
-            "• Right-click a square to erase it.<br>"
-            "• <i>Flip Board</i> changes the point of view.<br>"
-            "• <i>Copy FEN</i> copies the current position to the clipboard.<br>"
-            "• <i>Analysis</i> runs engine on the position.<br>"
-            "• Use the castling checkboxes to control O-O and O-O-O rights.<br>"
-            "- They're only enabled when the king and rook are on their starting squares.<br>"
-            "• To enable <i>en passant</i>, tick the box when a capture is available.<br>"
-            "- Then click the highlighted square to select the target.<br>"
-            "• The board orientation and side to move are automatically predicted.<br>"
-            )
+        
+        # Save initial state to history
+        self.save_state()
+        
+        # Use the same help text for What's This instead of duplicating it
+        self.setWhatsThis(self.help_text)
 
     # just some helpers
     def sync_squares_to_labels(self):
@@ -232,12 +256,65 @@ class BoardEditor(QDialog):
                 self.labels_2d[r][c] = self.squares[r][c].piece_label
         self.refresh_castling_checkboxes()
 
+    def save_state(self):
+        """Save current board state to history"""
+        self.sync_squares_to_labels()
+        
+        # Create a state object with just the board position
+        state = {
+            'labels_2d': copy.deepcopy(self.labels_2d)
+        }
+        
+        # If we're not at the end of the history, truncate it
+        if self.current_index < len(self.history) - 1:
+            self.history = self.history[:self.current_index + 1]
+        
+        # Add new state to history
+        self.history.append(state)
+        self.current_index = len(self.history) - 1
+        
+        # Update button states
+        self.update_undo_redo_buttons()
+
+    def restore_state(self, state):
+        """Restore board to a saved state"""
+        # Restore board position only
+        self.labels_2d = copy.deepcopy(state['labels_2d'])
+        for r in range(8):
+            for c in range(8):
+                self.squares[r][c].piece_label = self.labels_2d[r][c]
+                self.squares[r][c].update()
+        
+        # Refresh UI
+        self.refresh_castling_checkboxes()
+        
+        # Update button states
+        self.update_undo_redo_buttons()
+
+    def update_undo_redo_buttons(self):
+        """Update the enabled state of undo/redo buttons"""
+        self.undo_btn.setEnabled(self.current_index > 0)
+        self.redo_btn.setEnabled(self.current_index < len(self.history) - 1)
+
+    def on_undo(self):
+        """Restore the previous board state"""
+        if self.current_index > 0:
+            self.current_index -= 1
+            self.restore_state(self.history[self.current_index])
+
+    def on_redo(self):
+        """Restore the next board state"""
+        if self.current_index < len(self.history) - 1:
+            self.current_index += 1
+            self.restore_state(self.history[self.current_index])
+
     def on_clear_board(self):
         for r in range(8):
             for c in range(8):
                 self.squares[r][c].piece_label = "empty"
                 self.squares[r][c].update()
         self.refresh_castling_checkboxes()
+        self.save_state()
 
     def on_flip_board(self):
         self.labels_2d.reverse(); [row.reverse() for row in self.labels_2d]
@@ -251,6 +328,7 @@ class BoardEditor(QDialog):
         for c in range(8):
             self.grid.itemAtPosition(9, c+1).widget().setText(self.file_labels[c])
         self.is_flipped = not self.is_flipped
+        self.save_state()
 
     def on_switch_coords(self):
         self.coords_switched = not self.coords_switched
@@ -260,6 +338,7 @@ class BoardEditor(QDialog):
         for c in range(8):
             self.grid.itemAtPosition(9, c+1).widget().setText(self.file_labels[c])
         self.refresh_castling_checkboxes()
+        self.save_state()
 
     def on_reset_to_start(self):
         standard = [
@@ -282,6 +361,7 @@ class BoardEditor(QDialog):
                 self.squares[r][c].piece_label = self.labels_2d[r][c]
                 self.squares[r][c].update()
         self.refresh_castling_checkboxes()
+        self.save_state()
 
     def on_copy_fen(self):
         self.sync_squares_to_labels()
@@ -375,6 +455,7 @@ class BoardEditor(QDialog):
                         self.squares[r][c].piece_label = self.labels_2d[r][c]
                         self.squares[r][c].update()
                 self.refresh_castling_checkboxes()
+                self.save_state()
                 QMessageBox.information(self, "FEN Loaded", "FEN position loaded successfully")
             else:
                 QMessageBox.warning(self, "Invalid FEN", "FEN has incorrect number of squares")
@@ -668,6 +749,7 @@ class BoardEditor(QDialog):
             self.squares[row][col].piece_label = self.remembered_piece
             self.squares[row][col].update()
             self.sync_squares_to_labels()
+            self.save_state()  # Save state after placing a piece
             return True
         return False
         

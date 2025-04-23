@@ -3,6 +3,9 @@ import os
 import pickle
 from typing import List
 
+#########################################
+# Boar
+#########################################
 class BoardAnalyzer:
     """
     Analyzes chess positions to determine:
