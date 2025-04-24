@@ -679,12 +679,21 @@ class BoardEditor(QDialog):
         engine_dir = os.path.join(os.path.dirname(__file__), "engine")
         try:
             engine_name = None
+            missing_engine = None
             
             # First try to use the selected engine
             if self.selected_engine:
                 engine_path = os.path.join(engine_dir, self.selected_engine)
                 if os.path.exists(engine_path):
                     engine_name = self.selected_engine
+                else:
+                    # Remember the missing engine for a more informative message
+                    missing_engine = self.selected_engine
+                    # Reset the selected engine since it's missing
+                    self.selected_engine = None
+                    self.analysis_btn.setText("Analysis")
+                    # Also clear from settings so we don't try to load it again
+                    self.settings.remove("last_used_engine")
             
             # If no engine is currently selected, try to load last used engine from settings
             if not engine_name:
@@ -701,6 +710,11 @@ class BoardEditor(QDialog):
                         else:
                             display_name = os.path.splitext(last_engine)[0]
                         self.analysis_btn.setText(f"Analysis ({display_name})")
+                    else:
+                        # Remember the missing engine for a more informative message
+                        missing_engine = last_engine
+                        # Clear from settings so we don't try to load it again
+                        self.settings.remove("last_used_engine")
             
             # If still no engine, search recursively for any available engine
             if not engine_name:
@@ -728,7 +742,17 @@ class BoardEditor(QDialog):
                     # Update the selected engine
                     self.select_engine(engine_name)
                 else:
-                    raise FileNotFoundError("No engine found in any subdirectory")
+                    error_message = f"No UCI engine executable found in:\n  {engine_dir} or its subdirectories\n\n"
+                    if missing_engine:
+                        # Add information about the missing engine
+                        display_name = os.path.basename(missing_engine) if os.path.sep in missing_engine else missing_engine
+                        error_message = f"Previously selected engine '{display_name}' was not found.\n\n{error_message}"
+                    
+                    error_message += "Please add a chess engine (e.g. stockfish.exe) using the dropdown menu."
+                    
+                    QMessageBox.critical(self, "Engine not found", error_message)
+                    self.analysis_view.setPlainText("No engine available")
+                    return
                     
         except (StopIteration, FileNotFoundError):
             QMessageBox.critical(
