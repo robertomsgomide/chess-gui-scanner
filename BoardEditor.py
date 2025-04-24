@@ -5,7 +5,7 @@ import chess.engine
 import copy
 from BoardSquareWidget import BoardSquareWidget
 from labels import (PIECE_LABELS, labels_to_fen, get_piece_pixmap)
-from PyQt5.QtCore import Qt, QEvent
+from PyQt5.QtCore import Qt, QEvent, QSettings
 from PyQt5.QtGui import QIcon, QCursor
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QLabel,
@@ -29,6 +29,9 @@ class BoardEditor(QDialog):
         self.setWindowTitle("Board Editor")
         self.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.CustomizeWindowHint |
                             Qt.WindowCloseButtonHint | Qt.WindowContextHelpButtonHint)
+        
+        # Settings storage for user preferences
+        self.settings = QSettings("ChessAIScanner", "Settings")
         
         # Initialize piece memory feature
         self.remembered_piece = None  # Currently remembered piece
@@ -260,6 +263,21 @@ class BoardEditor(QDialog):
         
         # Variable to store the selected engine
         self.selected_engine = None
+        
+        # Load last used engine from settings
+        last_engine = self.settings.value("last_used_engine", None)
+        if last_engine:
+            engine_dir = os.path.join(os.path.dirname(__file__), "engine")
+            engine_path = os.path.join(engine_dir, last_engine)
+            if os.path.exists(engine_path):
+                self.selected_engine = last_engine
+                # Update the UI to show the loaded engine
+                if os.path.sep in last_engine:
+                    display_name = os.path.basename(last_engine)
+                    display_name = os.path.splitext(display_name)[0]
+                else:
+                    display_name = os.path.splitext(last_engine)[0]
+                self.analysis_btn.setText(f"Analysis ({display_name})")
         
         self.analysis_view = QTextEdit(); self.analysis_view.setReadOnly(True)
         self.analysis_view.setPlaceholderText("Engine lines will appear here")
@@ -564,6 +582,9 @@ class BoardEditor(QDialog):
         # Store the engine name
         self.selected_engine = engine_name
         
+        # Save engine selection to settings
+        self.settings.setValue("last_used_engine", engine_name)
+        
         # Update the analysis button text to show selected engine
         # For engines in subdirectories, just show the filename without extension
         if os.path.sep in engine_name:
@@ -659,13 +680,29 @@ class BoardEditor(QDialog):
         try:
             engine_name = None
             
-            # Use selected engine if available
+            # First try to use the selected engine
             if self.selected_engine:
                 engine_path = os.path.join(engine_dir, self.selected_engine)
                 if os.path.exists(engine_path):
                     engine_name = self.selected_engine
             
-            # If no engine is selected or the selected engine doesn't exist, find any available engine
+            # If no engine is currently selected, try to load last used engine from settings
+            if not engine_name:
+                last_engine = self.settings.value("last_used_engine", None)
+                if last_engine:
+                    last_engine_path = os.path.join(engine_dir, last_engine)
+                    if os.path.exists(last_engine_path):
+                        engine_name = last_engine
+                        self.selected_engine = last_engine
+                        # Update the UI to show the loaded engine
+                        if os.path.sep in last_engine:
+                            display_name = os.path.basename(last_engine)
+                            display_name = os.path.splitext(display_name)[0]
+                        else:
+                            display_name = os.path.splitext(last_engine)[0]
+                        self.analysis_btn.setText(f"Analysis ({display_name})")
+            
+            # If still no engine, search recursively for any available engine
             if not engine_name:
                 # Search recursively in all subdirectories
                 for root, dirs, files in os.walk(engine_dir):

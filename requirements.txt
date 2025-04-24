@@ -1,7 +1,10 @@
-python-chess>=1.9.0
-PyQt5>=5.15.0
-pyautogui>=0.9.50
-torch>=2.0.0
-torchvision>=0.15.0
-Pillow>=9.0.0
-numpy>=1.20.0
+# Core dependencies
+python-chess>=1.9.0,<2.0.0  # Chess logic and engine interface
+PyQt5>=5.15.0,<6.0.0        # GUI framework
+pyautogui>=0.9.50           # Screen capture
+
+# Machine learning
+torch>=2.0.0,<3.0.0         # Neural network
+torchvision>=0.15.0,<0.16.0 # Image processing for ML
+Pillow>=9.0.0,<10.0.0       # Image handling
+numpy>=1.20.0,<2.0.0        # Numerical operations
