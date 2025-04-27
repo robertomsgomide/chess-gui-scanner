@@ -69,8 +69,8 @@ python main.py
 
 <table>
   <tr>
-    <td><img src="https://github.com/user-attachments/assets/c6594f4b-6fff-49b0-a3f3-50baaf257380" alt="Main window with captured board"></td>
-    <td><img src="https://github.com/user-attachments/assets/4710b8e6-4b21-446f-897f-7a9f44fafc0f" alt="Board editor with engine analysis"></td>
+    <td><img src="https://github.com/user-attachments/assets/30e0b236-c536-448e-b149-0fcb6fae201e" alt="Main window with captured board"></td>
+    <td><img src="https://github.com/user-attachments/assets/101ca1be-8a3f-41e1-b5b9-7cae87a24a46" alt="Board editor with engine analysis"></td>
   </tr>
   <tr>
     <td align="center"><em>Main window with board preview</em></td>
