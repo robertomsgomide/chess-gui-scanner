@@ -3,6 +3,7 @@ import sys
 import chess
 import chess.engine
 import copy
+import re
 from BoardSquareWidget import BoardSquareWidget
 from labels import (PIECE_LABELS, labels_to_fen, get_piece_pixmap)
 from PyQt5.QtCore import Qt, QEvent, QSettings
@@ -10,7 +11,7 @@ from PyQt5.QtGui import QIcon, QCursor
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QLabel,
     QVBoxLayout, QDialog, QGridLayout, QMessageBox, QHBoxLayout,
-    QCheckBox, QRadioButton, QButtonGroup, QTextEdit, QWhatsThis, QAction, QMenu, QFileDialog, QSizePolicy
+    QCheckBox, QRadioButton, QButtonGroup, QWhatsThis, QAction, QMenu, QFileDialog, QSizePolicy
 )
 
 
@@ -40,6 +41,12 @@ class BoardEditor(QDialog):
         # Initialize undo/redo history
         self.history = []  # List to store board states
         self.current_index = -1  # Current position in history
+        
+        # Store original/current board state for analysis navigation
+        self.original_labels_2d = None  # Will store a copy of the initial position
+        self.original_side_to_move = None  # Will store the initial side to move
+        self.analysis_board = None  # Chess board for position tracking
+        self.analysis_positions = [[], [], []]  # Store board states for each analysis line
         
         # Disable automatic "What's this?" on right-click
         self.setContextMenuPolicy(Qt.PreventContextMenu)
@@ -81,11 +88,14 @@ class BoardEditor(QDialog):
 
         # internal board state
         self.labels_2d    = [row[:] for row in labels_2d]   # deep‑copy
-        self.is_flipped   = False   # board orientation flag
-        self.coords_switched = False # coordinate labels flipped?
+        self.is_flipped   = predicted_is_flipped   # Set board orientation POV based on prediction
+        self.coords_switched = predicted_is_flipped # coordinate labels flipped?
 
         self.file_labels = list("abcdefgh")   # default from White side
         self.rank_labels = list("87654321")   # "
+        if self.is_flipped:
+            self.file_labels.reverse()
+            self.rank_labels.reverse()
 
         outer = QHBoxLayout(self)
         left  = QVBoxLayout()       # board + controls
@@ -99,6 +109,11 @@ class BoardEditor(QDialog):
         self.white_rb.setChecked(predicted_side_to_move == 'w')  # Use predicted side
         self.black_rb.setChecked(predicted_side_to_move == 'b')  # Use predicted side
         side_group = QButtonGroup(self); side_group.addButton(self.white_rb); side_group.addButton(self.black_rb)
+        
+        # Connect side-to-move radio buttons to en passant refresh
+        self.white_rb.clicked.connect(self.refresh_en_passant)
+        self.black_rb.clicked.connect(self.refresh_en_passant)
+        
         self.ep_cb = QCheckBox("en passant")
         self.ep_cb.setEnabled(False)
         self.ep_cb.stateChanged.connect(self.on_ep_toggled)
@@ -261,6 +276,12 @@ class BoardEditor(QDialog):
         # Add container to layout
         right.addWidget(analysis_container)
         
+        # Add a reset button for analysis
+        self.reset_analysis_btn = QPushButton("Restore Analysis Board")
+        self.reset_analysis_btn.clicked.connect(self.restore_original_position)
+        self.reset_analysis_btn.setEnabled(False)  # Initially disabled until analysis is run
+        right.addWidget(self.reset_analysis_btn)
+        
         # Variable to store the selected engine
         self.selected_engine = None
         
@@ -279,10 +300,47 @@ class BoardEditor(QDialog):
                     display_name = os.path.splitext(last_engine)[0]
                 self.analysis_btn.setText(f"Analysis ({display_name})")
         
-        self.analysis_view = QTextEdit(); self.analysis_view.setReadOnly(True)
-        self.analysis_view.setPlaceholderText("Engine lines will appear here")
-        self.analysis_view.setFixedWidth(280)
-        right.addWidget(self.analysis_view, 1)
+        # Create navigable analysis lines
+        self.analysis_lines = []
+        self.analysis_line_widgets = []
+        self.selected_line_index = -1
+        self.current_move_indices = [0, 0, 0]  # Current position in each line
+        self.has_navigated = [False, False, False]  # Track if user has navigated in each line
+        
+        # Create analysis container
+        analysis_view_container = QWidget()
+        analysis_view_container.setFixedWidth(280)
+        analysis_view_layout = QVBoxLayout(analysis_view_container)
+        analysis_view_layout.setContentsMargins(5, 5, 5, 5)
+        
+        # Create placeholder text
+        placeholder_label = QLabel("Engine lines will appear here")
+        placeholder_label.setAlignment(Qt.AlignCenter)
+        analysis_view_layout.addWidget(placeholder_label)
+        self.placeholder_label = placeholder_label
+        
+        # Create three line widgets
+        for i in range(3):
+            line_widget = QLabel()
+            line_widget.setWordWrap(True)
+            line_widget.setTextFormat(Qt.RichText)
+            line_widget.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            line_widget.setMinimumHeight(60)  # Give enough height for the line
+            line_widget.setStyleSheet("padding: 5px; border: 1px solid transparent;")
+            line_widget.mousePressEvent = lambda event, idx=i: self.select_analysis_line(idx)
+            # Make line widgets focusable to receive key events
+            line_widget.setFocusPolicy(Qt.StrongFocus)
+            
+            # Install event filter for key presses
+            line_widget.installEventFilter(self)
+            
+            analysis_view_layout.addWidget(line_widget)
+            self.analysis_line_widgets.append(line_widget)
+            # Initially hide the line widgets
+            line_widget.hide()
+        
+        right.addWidget(analysis_view_container, 1)
+        self.analysis_view_container = analysis_view_container
         right.addStretch()
 
         # Auto-apply predicted orientation
@@ -304,6 +362,7 @@ class BoardEditor(QDialog):
             for c in range(8):
                 self.labels_2d[r][c] = self.squares[r][c].piece_label
         self.refresh_castling_checkboxes()
+        self.refresh_en_passant()
 
     def save_state(self):
         """Save current board state to history"""
@@ -336,6 +395,7 @@ class BoardEditor(QDialog):
         
         # Refresh UI
         self.refresh_castling_checkboxes()
+        self.refresh_en_passant()
         
         # Update button states
         self.update_undo_redo_buttons()
@@ -377,16 +437,19 @@ class BoardEditor(QDialog):
         for c in range(8):
             self.grid.itemAtPosition(9, c+1).widget().setText(self.file_labels[c])
         self.is_flipped = not self.is_flipped
+        self.coords_switched = not self.coords_switched
         self.save_state()
 
     def on_switch_coords(self):
-        self.coords_switched = not self.coords_switched
         self.file_labels.reverse(); self.rank_labels.reverse()
         for r in range(8):
             self.grid.itemAtPosition(r+1, 0).widget().setText(self.rank_labels[r])
         for c in range(8):
             self.grid.itemAtPosition(9, c+1).widget().setText(self.file_labels[c])
+        self.coords_switched = not self.coords_switched
+        self.is_flipped = not self.is_flipped    
         self.refresh_castling_checkboxes()
+        self.refresh_en_passant()
         self.save_state()
 
     def on_reset_to_start(self):
@@ -444,9 +507,13 @@ class BoardEditor(QDialog):
                 if side_to_move == 'w':
                     self.white_rb.setChecked(True)
                     self.black_rb.setChecked(False)
+                    if self.is_flipped == True:
+                        self.on_flip_board()
                 elif side_to_move == 'b':
                     self.white_rb.setChecked(False)
                     self.black_rb.setChecked(True)
+                    if self.is_flipped == False:
+                        self.on_flip_board()
             
             # Extract castling rights (third part after second space)
             if len(parts) >= 3:
@@ -484,17 +551,6 @@ class BoardEditor(QDialog):
                             row.append("empty")  # Fallback
                 new_labels.append(row)
             
-            # Handle board orientation - get the board in display format
-            if self.is_flipped:
-                new_labels.reverse()
-                for row in new_labels:
-                    row.reverse()
-            
-            if self.coords_switched:
-                # If coordinates are switched, we need to reverse rows but not flip the board
-                new_labels.reverse()
-                for row in new_labels:
-                    row.reverse()
             
             # Update our labels and squares
             if all(len(row) == 8 for row in new_labels):
@@ -672,8 +728,31 @@ class BoardEditor(QDialog):
         """
         Runs UCI engine at depth 20 and shows the top-3 PVs.
         """
-        # Display "Analyzing..." in the analysis view to show activity
-        self.analysis_view.setPlainText("Analyzing...")
+        # Clear previous analysis
+        self.analysis_lines = []
+        self.selected_line_index = -1
+        self.current_move_indices = [0, 0, 0]  # Current position in each line
+        self.has_navigated = [False, False, False]  # Reset navigation flags
+        
+        # Reset line widgets
+        for widget in self.analysis_line_widgets:
+            widget.hide()
+            widget.setStyleSheet("padding: 5px; border: 1px solid transparent;")
+        
+        # Show the placeholder during analysis
+        self.placeholder_label.setText("Analyzing...")
+        self.placeholder_label.show()
+        
+        # Save the current board state before analysis
+        self.sync_squares_to_labels()
+        self.original_labels_2d = copy.deepcopy(self.labels_2d)
+        self.original_side_to_move = self.get_side_to_move()
+        
+        # Enable the reset button
+        self.reset_analysis_btn.setEnabled(True)
+        
+        # Clear previous positions
+        self.analysis_positions = [[], [], []]
         
         # find any engine in ./engine
         engine_dir = os.path.join(os.path.dirname(__file__), "engine")
@@ -751,7 +830,7 @@ class BoardEditor(QDialog):
                     error_message += "Please add a chess engine (e.g. stockfish.exe) using the dropdown menu."
                     
                     QMessageBox.critical(self, "Engine not found", error_message)
-                    self.analysis_view.setPlainText("No engine available")
+                    self.placeholder_label.setText("No engine available")
                     return
                     
         except (StopIteration, FileNotFoundError):
@@ -760,7 +839,7 @@ class BoardEditor(QDialog):
                 f"No UCI engine executable found in:\n  {engine_dir} or its subdirectories\n\n"
                 "Please add a chess engine (e.g. stockfish.exe) using the dropdown menu."
             )
-            self.analysis_view.setPlainText("No engine available")
+            self.placeholder_label.setText("No engine available")
             return
         
         ANALYSIS_ENGINE_PATH = os.path.join(engine_dir, engine_name)
@@ -790,6 +869,9 @@ class BoardEditor(QDialog):
             engine = chess.engine.SimpleEngine.popen_uci(ANALYSIS_ENGINE_PATH, timeout=10.0)
             
             board = chess.Board(fen)
+            
+            # Store the starting board for position tracking
+            self.analysis_board = chess.Board(fen)
 
             # Set a maximum time limit to prevent hanging on problematic engines
             try:
@@ -809,12 +891,33 @@ class BoardEditor(QDialog):
                         score_str = f"{score.score()/100:.2f}"
                     san_line = board.variation_san(pv["pv"])
                     lines.append(f"{i}.  {score_str}  |  {san_line}")
+                    
+                    # Generate positions for each move in this line
+                    current_positions = [chess.Board(fen)]  # Start with the initial position
+                    position_board = chess.Board(fen)
+                    
+                    for move in pv["pv"]:
+                        position_board.push(move)
+                        current_positions.append(chess.Board(position_board.fen()))
+                    
+                    # Store the positions for this line
+                    self.analysis_positions[i-1] = current_positions
 
-                self.analysis_view.setPlainText("\n".join(lines))
+                # Store analysis lines
+                self.analysis_lines = lines
+                self.selected_line_index = 0
+                self.current_move_indices = [0, 0, 0]  # Current position in each line
+                
+                # Update the display
+                self.update_line_display()
+                
+                # Set focus to the first line
+                if self.analysis_line_widgets and len(self.analysis_line_widgets) > 0:
+                    self.analysis_line_widgets[0].setFocus()
                 
             except chess.engine.EngineError as e:
                 QMessageBox.critical(self, "Engine analysis error", str(e))
-                self.analysis_view.setPlainText(f"Engine error: {str(e)}\n\nTry a different engine.")
+                self.placeholder_label.setText(f"Engine error: {str(e)}\nTry a different engine.")
                 
             # Always make sure to quit the engine
             try:
@@ -830,20 +933,36 @@ class BoardEditor(QDialog):
                 f"Error: {str(e)}\n\n"
                 "Try selecting a different engine."
             )
-            self.analysis_view.setPlainText(f"Engine crashed. Try a different engine.")
+            self.placeholder_label.setText("Engine crashed. Try a different engine.")
             
         except Exception as e:
             QMessageBox.critical(
                 self, "Engine error",
                 f"Error running engine: {str(e)}"
             )
-            self.analysis_view.setPlainText(f"Error: {str(e)}")
+            self.placeholder_label.setText(f"Error: {str(e)}")
             
         finally:
             # Always restore cursor
             QApplication.restoreOverrideCursor()
+
+    def update_analysis_lines(self):
+        """Update the text in the analysis line widgets"""
+        # Just a shortcut method to update_line_display
+        self.update_line_display()
+
+    def select_analysis_line(self, index):
+        """Select a specific analysis line"""
+        # Check if the index is valid
+        if 0 <= index < len(self.analysis_lines):
+            # Update the selected index
+            self.selected_line_index = index
             
-        self.analysis_view.moveCursor(self.analysis_view.textCursor().Start)
+            # Update the display
+            self.update_line_display()
+            
+            # Give focus to the selected widget
+            self.analysis_line_widgets[index].setFocus()
 
     def get_final_labels_2d(self):
         self.sync_squares_to_labels()
@@ -884,7 +1003,6 @@ class BoardEditor(QDialog):
             else:                        # If enabled, automatically check it
                 cb.setChecked(True)      
             cb.blockSignals(False)
-        self.refresh_en_passant()
 
     def compute_ep_candidates(self):
         """
@@ -920,7 +1038,6 @@ class BoardEditor(QDialog):
                             disp_r = 7 - trg_r if self.is_flipped else trg_r
                             disp_c = 7 - trg_c if self.is_flipped else trg_c
                             self.ep_possible[(disp_r, disp_c)] = alg(trg_r, trg_c)
-                            break  # Only need to find one capturing pawn
                             
         else:  # Black to move
             # Check for possible en passant targets on the 3rd rank (6th rank from black's perspective)
@@ -941,10 +1058,17 @@ class BoardEditor(QDialog):
                             disp_r = 7 - trg_r if self.is_flipped else trg_r
                             disp_c = 7 - trg_c if self.is_flipped else trg_c
                             self.ep_possible[(disp_r, disp_c)] = alg(trg_r, trg_c)
-                            break  # Only need to find one capturing pawn
+
+        
 
     def refresh_en_passant(self):
         """Re-evaluate EP candidates; disable if none or if in check."""
+        # First clear any existing highlights
+        if self.ep_highlight_on:
+            for (r,c) in self.ep_possible:
+                self.squares[r][c].set_highlight(False)
+            self.ep_highlight_on = False
+            
         self.compute_ep_candidates()
         ok = bool(self.ep_possible)
 
@@ -971,6 +1095,13 @@ class BoardEditor(QDialog):
         if not ok:
             self.ep_cb.setChecked(False)
             self.ep_selected = None
+        
+        # If the checkbox is still checked (or was already checked), highlight the squares
+        if self.ep_cb.isChecked() and self.ep_possible:
+            for (r, c) in self.ep_possible:
+                self.squares[r][c].set_highlight(True)
+            self.ep_highlight_on = True
+            
         self.ep_cb.blockSignals(False)
 
     def on_ep_toggled(self, state):
@@ -1031,6 +1162,11 @@ class BoardEditor(QDialog):
             QApplication.restoreOverrideCursor()
             return
             
+        # Clear any existing remembered piece highlighting
+        self.remembered_piece = None
+        for palette_square in self.palette_squares:
+            palette_square.update()
+            
         # Set new piece
         self.remembered_piece = piece_label
         
@@ -1066,6 +1202,10 @@ class BoardEditor(QDialog):
         if QApplication.overrideCursor():
             QApplication.restoreOverrideCursor()
             
+        # Make sure to update palette squares to clear highlight
+        for palette_square in self.palette_squares:
+            palette_square.update()
+            
     def mousePressEvent(self, event):
         """Clear remembered piece if clicking outside of board squares"""
         if self.remembered_piece:
@@ -1077,3 +1217,239 @@ class BoardEditor(QDialog):
                 if not widget or not isinstance(widget, BoardSquareWidget):
                     self.clear_remembered_piece()
         super().mousePressEvent(event)
+
+    def eventFilter(self, obj, event):
+        """Handle key events for analysis line navigation"""
+        if obj in self.analysis_line_widgets and event.type() == QEvent.KeyPress:
+            if self.selected_line_index >= 0 and self.selected_line_index < len(self.analysis_lines):
+                # Get the selected line and moves for navigation
+                line_idx = self.selected_line_index
+                move_idx = self.current_move_indices[line_idx]
+                
+                # Handle arrow keys
+                if event.key() == Qt.Key_Right:
+                    # Move to next move in the variation - include all moves in the line
+                    line_positions = self.analysis_positions[line_idx]
+                    total_positions = len(line_positions) if line_positions else 0
+                    
+                    if total_positions > 0 and move_idx < total_positions - 1:
+                        self.current_move_indices[line_idx] += 1
+                        self.has_navigated[line_idx] = True
+                        self.update_line_display()
+                    return True
+                elif event.key() == Qt.Key_Left:
+                    # Move to previous move in the variation
+                    if self.current_move_indices[line_idx] > 0:
+                        self.current_move_indices[line_idx] -= 1
+                        self.has_navigated[line_idx] = True  # Mark that user has navigated this line
+                        self.update_line_display()
+                    return True
+                elif event.key() == Qt.Key_Up:
+                    # Select previous line
+                    if self.selected_line_index > 0:
+                        self.selected_line_index -= 1
+                        self.update_line_display()
+                    return True
+                elif event.key() == Qt.Key_Down:
+                    # Select next line
+                    if self.selected_line_index < len(self.analysis_lines) - 1:
+                        self.selected_line_index += 1
+                        self.update_line_display()
+                    return True
+                elif event.key() == Qt.Key_Home:
+                    # Go to start position
+                    self.current_move_indices[line_idx] = 0
+                    self.has_navigated[line_idx] = True  # Mark that user has navigated this line
+                    self.update_line_display()
+                    return True
+                elif event.key() == Qt.Key_End:
+                    # Go to end position - ensure we can reach the very last position
+                    line_positions = self.analysis_positions[line_idx]
+                    if line_positions and len(line_positions) > 0:
+                        self.current_move_indices[line_idx] = len(line_positions) - 1
+                        self.has_navigated[line_idx] = True
+                        self.update_line_display()
+                    return True
+        return super().eventFilter(obj, event)
+        
+    def update_line_display(self):
+        """Update the display of the analysis lines with highlighting of the current move"""
+        if not self.analysis_lines:
+            return
+            
+        # Hide the placeholder label if we have lines
+        self.placeholder_label.hide()
+        
+        # First update the board position based on the selected line and move
+        if self.selected_line_index >= 0 and self.selected_line_index < len(self.analysis_positions):
+            line_idx = self.selected_line_index
+            move_idx = self.current_move_indices[line_idx]
+            
+            # Check if there are positions for this line
+            if self.analysis_positions[line_idx] and move_idx < len(self.analysis_positions[line_idx]):
+                # Get the position for the current move
+                position_board = self.analysis_positions[line_idx][move_idx]
+                
+                # Convert the FEN to our internal format
+                self.update_board_from_fen(position_board.fen())
+        
+        # Now update the move highlighting in the text
+        for i, full_line in enumerate(self.analysis_lines):
+            # Split into the score part and the moves part
+            parts = full_line.split('|')
+            if len(parts) == 2:
+                score_part = parts[0].strip()
+                moves_part = parts[1].strip()
+                
+                # Better parsing of chess moves
+                moves = []
+                # Parse move numbers (like "1.", "2.", etc.) and actual moves
+                # This regex finds either move numbers (e.g., "1.") or actual moves (e.g., "e4", "Nf6", "O-O")
+                pattern = r'(\d+\.\.\.|\d+\.)|([KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](=[QRBN])?[+#]?|O-O-O|O-O)'
+                tokens = re.findall(pattern, moves_part)
+                # Extract just the moves (not the move numbers)
+                for token in tokens:
+                    if token[1]:  # This is a move, not a move number
+                        moves.append(token[1])
+                # Determine current move for highlighting
+                current_idx = self.current_move_indices[i]
+                current_idx = min(current_idx, len(moves)) if moves else 0
+                current_idx = max(0, current_idx)
+                self.current_move_indices[i] = current_idx
+                
+                # Build highlighted text
+                html_text = score_part + " | "
+                
+                # Re-analyze the original string to preserve formatting
+                last_end = 0
+                current_move_index = 0
+                
+                for match in re.finditer(pattern, moves_part):
+                    # Add text before this match
+                    html_text += moves_part[last_end:match.start()]
+                    
+                    # Add the match itself, with highlighting if it's a move (not a move number)
+                    # and it's the current move AND this is the selected line AND user has navigated
+                    text = match.group()
+                    if match.group(2):  # This is a move
+                        # When navigating, highlight the previous move to match what's on the board
+                        if self.has_navigated[i] and i == self.selected_line_index:
+                            if (current_move_index == current_idx - 1) or (current_idx == 0 and current_move_index == 0):
+                                html_text += f"<span style='background-color: yellow;'>{text}</span>"
+                            else:
+                                html_text += text
+                        else:
+                            html_text += text
+                        current_move_index += 1
+                    else:  # This is a move number
+                        html_text += text
+                    
+                    last_end = match.end()
+                
+                # Add any remaining text
+                html_text += moves_part[last_end:]
+                
+                # Update line widget
+                self.analysis_line_widgets[i].setText(html_text)
+                
+                # Show line widget
+                self.analysis_line_widgets[i].show()
+                
+                # Apply selection highlight - only highlight the selected line
+                if i == self.selected_line_index:
+                    self.analysis_line_widgets[i].setStyleSheet("padding: 5px; border: 2px solid blue; background-color: #e6f2ff;")
+                else:
+                    self.analysis_line_widgets[i].setStyleSheet("padding: 5px; border: 1px solid transparent;")
+            else:
+                # Just show the line as is if we can't parse it
+                self.analysis_line_widgets[i].setText(full_line)
+                self.analysis_line_widgets[i].show()
+                
+                # Apply selection highlight
+                if i == self.selected_line_index:
+                    self.analysis_line_widgets[i].setStyleSheet("padding: 5px; border: 2px solid blue; background-color: #e6f2ff;")
+                else:
+                    self.analysis_line_widgets[i].setStyleSheet("padding: 5px; border: 1px solid transparent;")
+
+    def update_board_from_fen(self, fen):
+        """Updates the board display from a FEN string while preserving orientation"""
+        try:
+            # Parse the FEN string
+            parts = fen.split(' ')
+            piece_placement = parts[0]
+            side_to_move = parts[1] if len(parts) > 1 else 'w'
+            
+            # Create a standard board representation from the FEN
+            ranks = piece_placement.split('/')
+            board_from_fen = []
+            
+            for rank in ranks:
+                row = []
+                for char in rank:
+                    if char.isdigit():
+                        # Add empty squares
+                        row.extend(["empty"] * int(char))
+                    else:
+                        # Convert piece character to our label format
+                        piece_color = 'w' if char.isupper() else 'b'
+                        piece_type = char.lower()
+                        if piece_type == 'p':
+                            row.append(f"{piece_color}p")
+                        elif piece_type == 'n':
+                            row.append(f"{piece_color}n")
+                        elif piece_type == 'b':
+                            row.append(f"{piece_color}b")
+                        elif piece_type == 'r':
+                            row.append(f"{piece_color}r")
+                        elif piece_type == 'q':
+                            row.append(f"{piece_color}q")
+                        elif piece_type == 'k':
+                            row.append(f"{piece_color}k")
+                        else:
+                            row.append("empty")  # Fallback
+                board_from_fen.append(row)
+            
+            # Now transform the board according to our current display orientation
+            display_board = copy.deepcopy(board_from_fen)
+            
+            # If board is flipped in display, we need to flip the new position too
+            if self.is_flipped and self.coords_switched:
+                display_board.reverse()
+                for row in display_board:
+                    row.reverse()
+                    
+            # Update the board display
+            self.labels_2d = display_board
+            for r in range(8):
+                for c in range(8):
+                    self.squares[r][c].piece_label = self.labels_2d[r][c]
+                    self.squares[r][c].update()
+            
+            # Update side to move
+            self.white_rb.setChecked(side_to_move == 'w')
+            self.black_rb.setChecked(side_to_move == 'b')
+            
+            # No need to refresh castling rights as we're just visualizing
+            # But do refresh en passant possibilities
+            self.refresh_en_passant()
+            
+        except Exception as e:
+            print(f"Error updating board from FEN: {e}")
+
+    def restore_original_position(self):
+        """Restore the original position from before analysis"""
+        if self.original_labels_2d:
+            self.labels_2d = copy.deepcopy(self.original_labels_2d)
+            for r in range(8):
+                for c in range(8):
+                    self.squares[r][c].piece_label = self.labels_2d[r][c]
+                    self.squares[r][c].update()
+            
+            # Restore side to move
+            if self.original_side_to_move:
+                self.white_rb.setChecked(self.original_side_to_move == 'w')
+                self.black_rb.setChecked(self.original_side_to_move == 'b')
+            
+            # Refresh UI elements
+            self.refresh_castling_checkboxes()
+            self.refresh_en_passant()

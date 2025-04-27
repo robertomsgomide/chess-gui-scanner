@@ -102,7 +102,7 @@ class MainWindow(QMainWindow):
             self.classifier.train_on_data(squares_imgs_2d, final_labels)
             
             # Save the orientation and side to move for future predictions
-            final_is_flipped = editor.is_flipped != editor.coords_switched  # Logical XOR - true flipped state
+            final_is_flipped = editor.is_flipped and editor.coords_switched  # Logical AND - true flipped state
             self.analyzer.save_training_data(final_labels, final_is_flipped, side)
 
         else:
