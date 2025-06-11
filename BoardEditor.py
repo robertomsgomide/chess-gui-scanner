@@ -88,14 +88,13 @@ class BoardEditor(QDialog):
 
         # internal board state
         self.labels_2d    = [row[:] for row in labels_2d]   # deep‑copy
-        self.is_flipped   = predicted_is_flipped   # Set board orientation POV based on prediction
-        self.coords_switched = predicted_is_flipped # coordinate labels flipped?
+        # Board orientation (True means the board currently shown is flipped – Black at the bottom)
+        # Use the predictor result so later conversions to FEN know whether the board must be un-flipped.
+        self.is_flipped   = predicted_is_flipped
+        self.coords_switched = False # coordinate labels flipped?
 
         self.file_labels = list("abcdefgh")   # default from White side
         self.rank_labels = list("87654321")   # "
-        if self.is_flipped:
-            self.file_labels.reverse()
-            self.rank_labels.reverse()
 
         outer = QHBoxLayout(self)
         left  = QVBoxLayout()       # board + controls
@@ -111,12 +110,12 @@ class BoardEditor(QDialog):
         side_group = QButtonGroup(self); side_group.addButton(self.white_rb); side_group.addButton(self.black_rb)
         
         # Connect side-to-move radio buttons to en passant refresh
-        self.white_rb.clicked.connect(self.refresh_en_passant)
-        self.black_rb.clicked.connect(self.refresh_en_passant)
+        self.white_rb.clicked.connect(lambda: (self.clear_remembered_piece(), self.refresh_en_passant()))
+        self.black_rb.clicked.connect(lambda: (self.clear_remembered_piece(), self.refresh_en_passant()))
         
         self.ep_cb = QCheckBox("en passant")
         self.ep_cb.setEnabled(False)
-        self.ep_cb.stateChanged.connect(self.on_ep_toggled)
+        self.ep_cb.stateChanged.connect(lambda state: (self.clear_remembered_piece(), self.on_ep_toggled(state)))
         top_row.addWidget(self.ep_cb)
         self.ep_possible   = {}   # {(r,c): "e3", ...}
         self.ep_selected   = None # "e3"  (FEN field) or None
@@ -179,8 +178,8 @@ class BoardEditor(QDialog):
         self.grid.addWidget(QLabel(""), 9, 0)
         
         # Add Undo/Redo buttons to the right of ranks 8 and 7
-        self.undo_btn = QPushButton("Undo"); self.undo_btn.clicked.connect(self.on_undo)
-        self.redo_btn = QPushButton("Redo"); self.redo_btn.clicked.connect(self.on_redo)
+        self.undo_btn = QPushButton("Undo"); self.undo_btn.clicked.connect(lambda: (self.clear_remembered_piece(), self.on_undo()))
+        self.redo_btn = QPushButton("Redo"); self.redo_btn.clicked.connect(lambda: (self.clear_remembered_piece(), self.on_redo()))
         
         # Set minimum width to prevent text from being cut off
         self.undo_btn.setMinimumWidth(60)
@@ -230,7 +229,10 @@ class BoardEditor(QDialog):
         # bottom button bar
         btn_bar = QHBoxLayout(); left.addLayout(btn_bar)
         def add_btn(txt, icon_path, slot):
-            b = QPushButton(txt); b.clicked.connect(slot)
+            def wrapped_slot():
+                self.clear_remembered_piece()  # Clear remembered piece on any button click
+                slot()
+            b = QPushButton(txt); b.clicked.connect(wrapped_slot)
             if icon_path: b.setIcon(QIcon(icon_path))
             btn_bar.addWidget(b); return b
 
@@ -256,7 +258,7 @@ class BoardEditor(QDialog):
         # Main Analysis button
         self.analysis_btn = QPushButton("Analysis")
         self.analysis_btn.setIcon(QIcon(cengine_path))
-        self.analysis_btn.clicked.connect(self.on_analysis)
+        self.analysis_btn.clicked.connect(lambda: (self.clear_remembered_piece(), self.on_analysis()))
         
         # Dropdown button for engine selection
         self.engine_dropdown_btn = QPushButton("▼")
@@ -267,7 +269,7 @@ class BoardEditor(QDialog):
         self.engine_dropdown_btn.setFixedHeight(self.analysis_btn.sizeHint().height())
         self.engine_dropdown_btn.setStyleSheet("QPushButton { padding: 0px; }")
         
-        self.engine_dropdown_btn.clicked.connect(self.show_engine_menu)
+        self.engine_dropdown_btn.clicked.connect(lambda: (self.clear_remembered_piece(), self.show_engine_menu()))
         
         # Add buttons to container
         analysis_layout.addWidget(self.analysis_btn, 1)  # Main button takes most space
@@ -278,7 +280,7 @@ class BoardEditor(QDialog):
         
         # Add a reset button for analysis
         self.reset_analysis_btn = QPushButton("Restore Analysis Board")
-        self.reset_analysis_btn.clicked.connect(self.restore_original_position)
+        self.reset_analysis_btn.clicked.connect(lambda: (self.clear_remembered_piece(), self.restore_original_position()))
         self.reset_analysis_btn.setEnabled(False)  # Initially disabled until analysis is run
         right.addWidget(self.reset_analysis_btn)
         
@@ -447,7 +449,7 @@ class BoardEditor(QDialog):
         for c in range(8):
             self.grid.itemAtPosition(9, c+1).widget().setText(self.file_labels[c])
         self.coords_switched = not self.coords_switched
-        self.is_flipped = not self.is_flipped    
+        # Don't toggle is_flipped - this is just a coordinate label fix, not a board orientation change
         self.refresh_castling_checkboxes()
         self.refresh_en_passant()
         self.save_state()
@@ -478,8 +480,13 @@ class BoardEditor(QDialog):
     def on_copy_fen(self):
         self.sync_squares_to_labels()
         effective = [row[:] for row in self.labels_2d]
-        if self.rank_labels[0] == '1': effective.reverse()
-        if self.file_labels[0] != 'a': [row.reverse() for row in effective]
+        # Convert from current display orientation to standard FEN orientation
+        # Standard FEN: rank 8 first (index 0), file a first (index 0)
+        if self.is_flipped:
+            # Un-flip the data to get it into standard orientation for the FEN
+            effective.reverse()
+            for row in effective:
+                row.reverse()
         fen = labels_to_fen(effective, self.get_side_to_move(), self.get_castling_rights(), self.get_ep_field())
         QApplication.clipboard().setText(fen)
         QMessageBox.information(self, "FEN copied", fen)
@@ -507,13 +514,9 @@ class BoardEditor(QDialog):
                 if side_to_move == 'w':
                     self.white_rb.setChecked(True)
                     self.black_rb.setChecked(False)
-                    if self.is_flipped == True:
-                        self.on_flip_board()
                 elif side_to_move == 'b':
                     self.white_rb.setChecked(False)
                     self.black_rb.setChecked(True)
-                    if self.is_flipped == False:
-                        self.on_flip_board()
             
             # Extract castling rights (third part after second space)
             if len(parts) >= 3:
@@ -523,7 +526,7 @@ class BoardEditor(QDialog):
                 self.b_k_cb.setChecked('k' in castling)
                 self.b_q_cb.setChecked('q' in castling)
             
-            # Convert to our internal format
+            # Convert to our internal format (in standard orientation)
             new_labels = []
             for rank in ranks:
                 row = []
@@ -551,8 +554,19 @@ class BoardEditor(QDialog):
                             row.append("empty")  # Fallback
                 new_labels.append(row)
             
+            # Reset to standard view orientation (White's POV) for consistency
+            self.file_labels = list("abcdefgh")
+            self.rank_labels = list("87654321")
+            self.is_flipped = False
+            self.coords_switched = False
             
-            # Update our labels and squares
+            # Update coordinate labels in the UI
+            for r in range(8):
+                self.grid.itemAtPosition(r+1, 0).widget().setText(self.rank_labels[r])
+            for c in range(8):
+                self.grid.itemAtPosition(9, c+1).widget().setText(self.file_labels[c])
+            
+            # Update our labels and squares (new_labels is already in standard orientation)
             if all(len(row) == 8 for row in new_labels):
                 self.labels_2d = new_labels
                 for r in range(8):
@@ -847,9 +861,9 @@ class BoardEditor(QDialog):
         # build a FEN that matches the user's coordinate view
         self.sync_squares_to_labels()
         board_copy = [row[:] for row in self.labels_2d]
-        if self.rank_labels[0] == '1':
+        if self.is_flipped:
+            # Un-flip the data to get it into standard orientation for the FEN
             board_copy.reverse()
-        if self.file_labels[0] != 'a':
             for row in board_copy:
                 row.reverse()
 
@@ -982,9 +996,9 @@ class BoardEditor(QDialog):
         """Enable box when K+R are on their start squares, else grey-out+untick."""
         # get the board in *standard orientation* (rank‑8 first, file‑a first)
         board = [row[:] for row in self.labels_2d]
-        if self.rank_labels[0] == '1':           # ranks are upside‑down
+        if self.is_flipped:
+            # Un-flip the data to get it into standard orientation
             board.reverse()
-        if self.file_labels[0] != 'a':           # files are flipped
             for r in board:
                 r.reverse()
 
@@ -1011,10 +1025,12 @@ class BoardEditor(QDialog):
         self.ep_possible.clear()
         side = self.get_side_to_move()  # 'w' or 'b'
 
-        # board in standard orientation
+        # board in standard orientation (rank-8 first, file-a first)
         std = [row[:] for row in self.labels_2d]
-        if self.rank_labels[0] == '1': std.reverse()
-        if self.file_labels[0] != 'a': [row.reverse() for row in std]
+        if self.is_flipped:
+            std.reverse()
+            for row in std:
+                row.reverse()
 
         def alg(r, c): return "abcdefgh"[c] + str(8 - r)
 
@@ -1073,9 +1089,8 @@ class BoardEditor(QDialog):
         ok = bool(self.ep_possible)
 
         std = [row[:] for row in self.labels_2d]
-        if self.rank_labels[0] == '1':      # ranks flipped in UI?
+        if self.is_flipped:
             std.reverse()
-        if self.file_labels[0] != 'a':      # files flipped?
             for row in std:
                 row.reverse()
 
@@ -1209,9 +1224,11 @@ class BoardEditor(QDialog):
     def mousePressEvent(self, event):
         """Clear remembered piece if clicking outside of board squares"""
         if self.remembered_piece:
-            # We'll keep the piece remembered unless the click was on a non-board area
-            # The individual BoardSquareWidgets will handle their own clicks
-            if event.button() == Qt.LeftButton:
+            # Clear remembered piece on any right-click anywhere in the window
+            if event.button() == Qt.RightButton:
+                self.clear_remembered_piece()
+            # For left-clicks, only clear if clicking outside board squares
+            elif event.button() == Qt.LeftButton:
                 # Check if we clicked on something that isn't a board square
                 widget = self.childAt(event.pos())
                 if not widget or not isinstance(widget, BoardSquareWidget):
@@ -1412,8 +1429,8 @@ class BoardEditor(QDialog):
             # Now transform the board according to our current display orientation
             display_board = copy.deepcopy(board_from_fen)
             
-            # If board is flipped in display, we need to flip the new position too
-            if self.is_flipped and self.coords_switched:
+            # If the main board is showing flipped pieces, the analysis board must also show flipped pieces
+            if self.is_flipped:
                 display_board.reverse()
                 for row in display_board:
                     row.reverse()

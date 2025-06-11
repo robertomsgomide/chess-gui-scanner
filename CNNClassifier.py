@@ -6,10 +6,12 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
-from labels import PIECE_LABELS
+from labels import PIECE_LABELS, labels_to_fen
 import logging
 import numpy as np
 import json
+import pickle
+import hashlib
 from typing import Dict, List, Tuple
 
 # Set up logging
@@ -194,8 +196,15 @@ class CNNClassifier:
         
         self.label_to_idx = {lbl:i for i,lbl in enumerate(PIECE_LABELS)}
         self.idx_to_label = {i:lbl for lbl,i in self.label_to_idx.items()}
-        self.training_data = []
-        self.validation_data = []
+        
+        # Load existing training data if available
+        self.training_data_file = "training_data.pkl"
+        self.training_data, self.validation_data = self._load_training_data()
+        
+        # Pending storage system
+        self.pending_file = "pending_training_data.pkl"
+        self.pending_threshold = 8  # Number of samples before triggering training
+        self.pending_data = self._load_pending_data()
         
         if os.path.exists("chess_classifier.pt"):
             self.model.load_state_dict(torch.load("chess_classifier.pt", map_location=self.device))
@@ -207,6 +216,132 @@ class CNNClassifier:
         """Convert a PIL image to a tensor on the correct device."""
         tensor_img = self.transform(pil_img)
         return tensor_img.to(self.device)
+
+    def _load_pending_data(self):
+        """Load pending training data from disk."""
+        if os.path.exists(self.pending_file):
+            try:
+                with open(self.pending_file, 'rb') as f:
+                    data = pickle.load(f)
+                logger.info(f"Loaded {len(data)} pending training positions")
+                return data
+            except Exception as e:
+                logger.error(f"Error loading pending data: {e}")
+                return {}
+        return {}
+
+    def _save_pending_data(self):
+        """Save pending training data to disk."""
+        try:
+            with open(self.pending_file, 'wb') as f:
+                pickle.dump(self.pending_data, f)
+        except Exception as e:
+            logger.error(f"Error saving pending data: {e}")
+
+    def _load_training_data(self):
+        """Load training and validation data from disk."""
+        if os.path.exists(self.training_data_file):
+            try:
+                with open(self.training_data_file, 'rb') as f:
+                    data = pickle.load(f)
+                training_data = data.get('training_data', [])
+                validation_data = data.get('validation_data', [])
+                logger.info(f"Loaded {len(training_data)} training samples and {len(validation_data)} validation samples")
+                return training_data, validation_data
+            except Exception as e:
+                logger.error(f"Error loading training data: {e}")
+                return [], []
+        return [], []
+
+    def _save_training_data(self):
+        """Save training and validation data to disk."""
+        try:
+            data = {
+                'training_data': self.training_data,
+                'validation_data': self.validation_data
+            }
+            with open(self.training_data_file, 'wb') as f:
+                pickle.dump(data, f)
+            logger.info(f"Saved {len(self.training_data)} training samples and {len(self.validation_data)} validation samples")
+        except Exception as e:
+            logger.error(f"Error saving training data: {e}")
+
+    def _generate_position_hash(self, labels_2d, side_to_move='w', castling_rights='KQkq', ep_field='-'):
+        """Generate a unique hash for a chess position based on its FEN."""
+        try:
+            # Create FEN from position
+            fen = labels_to_fen(labels_2d, side_to_move, castling_rights, ep_field)
+            # Use just the position part (before the first space) for uniqueness
+            position_part = fen.split(' ')[0]
+            return hashlib.md5(position_part.encode()).hexdigest()
+        except Exception as e:
+            logger.error(f"Error generating position hash: {e}")
+            # Fallback: create hash from string representation of labels
+            position_str = str(labels_2d)
+            return hashlib.md5(position_str.encode()).hexdigest()
+
+    def _add_to_pending(self, squares_2d, labels_2d, position_hash):
+        """Add correction data to pending storage."""
+        corrections = []
+        for r in range(8):
+            for c in range(8):
+                pil_img = squares_2d[r][c]
+                lbl = labels_2d[r][c]
+                if lbl not in self.label_to_idx:
+                    continue
+                
+                # Only store corrections (where prediction != actual label)
+                predicted_lbl = self.predict_label(pil_img)
+                if predicted_lbl != lbl:
+                    corrections.append({
+                        'image': pil_img,
+                        'label': lbl,
+                        'label_idx': self.label_to_idx[lbl],
+                        'predicted': predicted_lbl,
+                        'position': (r, c)
+                    })
+        
+        if corrections:
+            self.pending_data[position_hash] = {
+                'corrections': corrections,
+                'position_labels': [row[:] for row in labels_2d],  # Deep copy
+                'timestamp': np.datetime64('now').item()
+            }
+            self._save_pending_data()
+            logger.info(f"Added {len(corrections)} corrections from position {position_hash[:8]}... to pending data")
+            return len(corrections)
+        return 0
+
+    def _process_pending_data(self, force=False):
+        """Process accumulated pending data when threshold is reached."""
+        if not force and len(self.pending_data) < self.pending_threshold:
+            return
+        
+        logger.info(f"Processing {len(self.pending_data)} pending positions for training")
+        
+        # Extract all corrections from pending data
+        total_corrections = 0
+        for position_hash, position_data in self.pending_data.items():
+            corrections = position_data['corrections']
+            for correction in corrections:
+                pil_img = correction['image']
+                y_idx = correction['label_idx']
+                
+                # Split data into training and validation
+                if random.random() < (1 - self.config["data"]["validation_split"]):
+                    self.training_data.append((pil_img, y_idx))
+                else:
+                    self.validation_data.append((pil_img, y_idx))
+                total_corrections += 1
+        
+        logger.info(f"Added {total_corrections} corrections to training data")
+        
+        # Clear pending data after processing
+        self.pending_data.clear()
+        self._save_pending_data()
+        
+        # Now proceed with normal training
+        return total_corrections
 
     def predict_label(self, pil_img):
         """Predict the label for a single chess piece image."""
@@ -237,8 +372,9 @@ class CNNClassifier:
         for i in range(0, len(pil_images), batch_size):
             batch = pil_images[i:i+batch_size]
             with torch.no_grad():
-                tensors = [self._preprocess(img).unsqueeze(0) for img in batch]
-                batch_tensor = torch.cat(tensors, dim=0)
+                # Apply transforms to all images in batch, then stack
+                transformed_imgs = [self.transform(img) for img in batch]
+                batch_tensor = torch.stack(transformed_imgs).to(self.device)
                 logits = self.model(batch_tensor)
                 pred_indices = logits.argmax(dim=1).tolist()
                 
@@ -247,30 +383,72 @@ class CNNClassifier:
                 
         return results
     
-    def train_on_data(self, squares_2d, labels_2d):
-        """Train the model on new data from the chess board."""
-        new_samples_added = 0
-        for r in range(8):
-            for c in range(8):
-                pil_img = squares_2d[r][c]
-                lbl = labels_2d[r][c]
-                if lbl not in self.label_to_idx:
-                    continue
-                # Only add samples where prediction != label
-                if self.predict_label(pil_img) == lbl:
-                    continue  # Skip already correct predictions
+    def train_on_data(self, squares_2d, labels_2d, side_to_move='w', castling_rights='KQkq', ep_field='-'):
+        """
+        Train the model on new data from the chess board using pending storage system.
+        
+        Args:
+            squares_2d: 2D array of PIL images
+            labels_2d: 2D array of piece labels  
+            side_to_move: Side to move ('w' or 'b')
+            castling_rights: Castling rights string
+            ep_field: En passant field
+        """
+        # Generate unique hash for this position
+        position_hash = self._generate_position_hash(labels_2d, side_to_move, castling_rights, ep_field)
+        
+        # Check if we've already processed this exact position
+        if position_hash in self.pending_data:
+            logger.info(f"Position {position_hash[:8]}... already in pending data, skipping")
+            return
+        
+        # Add corrections to pending storage
+        corrections_added = self._add_to_pending(squares_2d, labels_2d, position_hash)
+        
+        if corrections_added == 0:
+            logger.info("No corrections needed for this position")
+            return
+        
+        # Check for immediate training if many corrections (rich training example)
+        if corrections_added >= 15:
+            logger.info(f"Position has {corrections_added} corrections, training immediately (bypassing pending storage)")
+            
+            # Extract corrections directly and train immediately (bypass pending system)
+            position_data = self.pending_data[position_hash]
+            corrections = position_data['corrections']
+            
+            # Add corrections directly to training data
+            for correction in corrections:
+                pil_img = correction['image']
+                y_idx = correction['label_idx']
                 
-                # Store the PIL image directly, not the tensor
-                y_idx = self.label_to_idx[lbl]
                 # Split data into training and validation
                 if random.random() < (1 - self.config["data"]["validation_split"]):
                     self.training_data.append((pil_img, y_idx))
                 else:
                     self.validation_data.append((pil_img, y_idx))
-                new_samples_added += 1
+            
+            # Remove from pending since we're processing immediately
+            del self.pending_data[position_hash]
+            self._save_pending_data()
+            
+            logger.info(f"Added {corrections_added} corrections directly to training data")
+            
+        # Check if we've reached the threshold for training
+        elif len(self.pending_data) >= self.pending_threshold:
+            logger.info(f"Reached pending threshold ({len(self.pending_data)} positions), processing for training")
+            total_corrections = self._process_pending_data()
+            
+            if total_corrections == 0:
+                logger.info("No corrections to process")
+                return
+        else:
+            logger.info(f"Added to pending storage. {len(self.pending_data)}/{self.pending_threshold} positions accumulated")
+            return
 
+        # If we reach here, we have enough data to train
         if len(self.training_data) < 8:
-            logger.info(f"Not enough data to train ({new_samples_added} new samples)")
+            logger.info(f"Still not enough data to train ({len(self.training_data)} samples)")
             return
 
         # If no validation data, move some training data to validation
@@ -281,6 +459,56 @@ class CNNClassifier:
             for i in sorted(val_indices, reverse=True):
                 del self.training_data[i]
 
+        # Execute the training
+        self._execute_training()
+
+    def get_pending_status(self):
+        """Get information about pending training data."""
+        total_corrections = 0
+        position_info = []
+        
+        for position_hash, position_data in self.pending_data.items():
+            corrections = position_data['corrections']
+            total_corrections += len(corrections)
+            position_info.append({
+                'hash': position_hash[:8] + '...',
+                'corrections': len(corrections),
+                'timestamp': position_data.get('timestamp', 'unknown')
+            })
+        
+        return {
+            'total_positions': len(self.pending_data),
+            'total_corrections': total_corrections,
+            'threshold': self.pending_threshold,
+            'positions': position_info
+        }
+
+    def force_process_pending(self):
+        """Manually trigger processing of pending data regardless of threshold."""
+        if len(self.pending_data) == 0:
+            logger.info("No pending data to process")
+            return False
+        
+        logger.info(f"Force processing {len(self.pending_data)} pending positions")
+        total_corrections = self._process_pending_data()
+        
+        if total_corrections > 0 and len(self.training_data) >= 8:
+            # Continue with normal training logic
+            if len(self.validation_data) == 0 and len(self.training_data) > 8:
+                num_val_samples = min(8, int(len(self.training_data) * self.config["data"]["validation_split"]))
+                val_indices = random.sample(range(len(self.training_data)), num_val_samples)
+                self.validation_data = [self.training_data[i] for i in sorted(val_indices, reverse=True)]
+                for i in sorted(val_indices, reverse=True):
+                    del self.training_data[i]
+            
+            # Execute the training portion from train_on_data
+            self._execute_training()
+            return True
+        
+        return False
+
+    def _execute_training(self):
+        """Execute the actual training process."""
         # Create datasets and dataloaders
         use_augmentation = self.config["data"]["use_augmentation"]
         train_transform = self.augment_transform if use_augmentation else self.transform
@@ -372,15 +600,8 @@ class CNNClassifier:
                 if avg_val_loss < best_val_loss:
                     best_val_loss = avg_val_loss
                     patience_counter = 0
-                    # Save best model
+                    # Save best model (keep only the essential checkpoint)
                     torch.save(self.model.state_dict(), "chess_classifier_best.pt")
-                    torch.save({
-                        'epoch': epoch,
-                        'model_state_dict': self.model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'loss': best_val_loss,
-                        'config': self.config
-                    }, "chess_classifier_checkpoint.pt")
                 else:
                     patience_counter += 1
                     if patience_counter >= patience and epoch >= self.config["training"]["min_epochs"]:
@@ -409,3 +630,6 @@ class CNNClassifier:
         
         torch.save(self.model.state_dict(), "chess_classifier.pt")
         logger.info("Model weights saved to chess_classifier.pt")
+        
+        # Save training data for future sessions
+        self._save_training_data()

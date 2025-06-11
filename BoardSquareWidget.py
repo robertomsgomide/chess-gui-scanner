@@ -113,6 +113,21 @@ class BoardSquareWidget(QWidget):
             (self.row, self.col) in self.board_editor.ep_possible):
             self.board_editor.on_ep_square_clicked(self.row, self.col)
             return
+        
+        # If left-clicking on a palette piece and there's a remembered piece, clear it
+        if (event.button() == Qt.LeftButton and 
+            self.is_palette and 
+            hasattr(self.board_editor, 'remembered_piece') and 
+            self.board_editor.remembered_piece):
+            self.board_editor.clear_remembered_piece()
+            return
+        
+        # If right-clicking anywhere and there's a remembered piece, clear it
+        if (event.button() == Qt.RightButton and 
+            hasattr(self.board_editor, 'remembered_piece') and 
+            self.board_editor.remembered_piece):
+            self.board_editor.clear_remembered_piece()
+            # Don't return here - let right-click continue to erase pieces if on board
             
         # Handle right-click for erasing a piece
         if event.button() == Qt.RightButton and self.row >= 0:

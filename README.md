@@ -1,106 +1,102 @@
-# chess-scanner
+# Chess Scanner
 
-A PyQt5-based desktop application that **captures chessboards from your screen, automatically identifies pieces using a neural network, predicts board orientation and active player, and lets you edit positions with a convenient drag-and-drop interface**.
+Capture any chessboard from your screen and analyse it instantly — fully offline.
 
----
+![Demo screenshot](docs/demo.gif)
 
-## Key Features
+## Highlights
 
-| Feature | Details |
-|---------|---------|
-| **Screen Capture** | Full-screen overlay with 8×8 grid for precise board selection |
-| **Piece Recognition** | Convolutional neural network (~0.85M parameters) identifies pieces from screenshots |
-| **Position Analysis** | Uses both heuristics and machine learning to predict board orientation and side to move |
-| **Advanced Board Editor** | Intuitive interface with drag-and-drop, piece memory, castling rights and en passant detection |
-| **Self-Improving AI** | Learns from your corrections to improve future recognition accuracy |
-| **UCI Engine Support** | Connect to any compatible chess engine (e.g., Stockfish) for instant position analysis |
-| **Fully Offline** | No internet connection required - everything runs locally |
+• Screen overlay with 8×8 grid for pixel-perfect selection  
+• Lightweight CNN recognises every square (~0.9 M parameters)  
+• Smart heuristics predict board orientation *and* side-to-move  
+• Feature-rich editor (drag-and-drop, sticky pieces, auto-castling & en-passant)  
+• Continuous learning – every manual correction can be stored as training data  
+• UCI engine integration (Stockfish, Berserk, etc.) for instant evaluation  
+• Works on Windows, Linux and macOS – **no internet connection required**
 
 ---
 
-## Quick Start
+## Installation
 
-### 1. Clone and set up environment
+1. Install **Python ≥ 3.9**.
+2. Clone the repository and (optionally) create a virtual environment:
+
 ```bash
-git clone https://github.com/<your-username>/chess-ai-scanner.git
-cd chess-ai-scanner
-python -m venv venv
-source venv/bin/activate    # Linux/macOS
-venv\Scripts\activate       # Windows
+git clone https://github.com/<your-username>/chess-scanner.git
+cd chess-scanner
+
+python -m venv .venv        # optional but recommended
+# Windows
+.\.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
 ```
 
-### 2. Install dependencies
+3. Install the Python requirements:
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Add a chess engine (optional)
-```bash
-# Place any UCI engine executable in the 'engine' folder
-```
+4. (Optional) place your favourite UCI engine executable (e.g. `stockfish.exe`) in the `engine/` folder.
 
-### 4. Run the application
+---
+
+## Usage
+
 ```bash
 python main.py
 ```
 
-### Requirements
-- Python ≥ 3.9
-- PyQt5
-- python-chess
-- PyTorch & torchvision
-- Pillow
-- pyautogui
-- numpy
+1. Press **Capture Board** and draw a rectangle around the chessboard on screen.  
+2. Verify / correct the automatically recognised position.  
+3. Click **Analyse** to let the engine examine the position.
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| Esc | Cancel capture / close dialog |
+| R   | Re-capture board |
+| Ctrl&nbsp;+&nbsp;S | Copy FEN to clipboard |
+| Space | Start / stop engine |
 
 ---
 
-## How It Works
+## Project layout
 
-1. **Capture** - Use the screen overlay to select any chessboard visible on your screen
-2. **Recognize** - The CNN classifies each square and predicts the board's orientation
-3. **Edit** - Make corrections with intuitive tools:
-   - Drag pieces from the palette or right-click to clear squares
-   - Double-click pieces for "sticky" placement mode
-   - Automatic castling rights detection based on king and rook positions
-   - En passant target highlighting and selection
-4. **Analyze** - Run a UCI engine to evaluate the position with multiple lines of analysis
-5. **Learn** - The model improves with each correction, becoming more accurate over time
-
-<table>
-  <tr>
-    <td><img src="https://github.com/user-attachments/assets/c6594f4b-6fff-49b0-a3f3-50baaf257380" alt="Main window with captured board"></td>
-    <td><img src="https://github.com/user-attachments/assets/4710b8e6-4b21-446f-897f-7a9f44fafc0f" alt="Board editor with engine analysis"></td>
-  </tr>
-  <tr>
-    <td align="center"><em>Main window with board preview</em></td>
-    <td align="center"><em>Board editor with engine analysis panel</em></td>
-  </tr>
-</table>
+```
+chess-scanner/
+├─ BoardEditor.py        # GUI for editing / analysing positions
+├─ BoardAnalyzer.py      # Heuristic + k-NN orientation predictor
+├─ CNNClassifier.py      # PyTorch piece classifier
+├─ SnipOverlay.py        # Full-screen capture overlay
+├─ main.py               # Entry point
+├─ engine/               # Place UCI engines here
+└─ icons/                # Piece bitmaps
+```
 
 ---
 
-## Technical Details
+## Tech stack
 
-The application consists of:
-
-- **BoardAnalyzer**: Predicts board orientation and side to move using k-nearest neighbors and heuristics
-- **CNNClassifier**: Neural network for piece recognition with continuous learning capability
-- **SnipOverlay**: Full-screen capture interface with 8×8 grid alignment
-- **BoardEditor**: Feature-rich position editor with drag-and-drop interface and UCI engine integration
-
-The neural network model (`SimpleCNN`) uses:
-- 3 convolutional blocks with batch normalization
-- Adaptive pooling for size flexibility
-- Dropout layers for regularization
-- Incremental learning that preserves previously gained knowledge
-
-All training data is saved locally, allowing the model to improve with each use session.
+• PyQt5 — cross-platform desktop GUI  
+• PyTorch & TorchVision — CNN and image pre-processing  
+• Pillow — handling raw screen captures  
+• python-chess — FEN generation & engine communication  
+• numpy — feature extraction  
+• pyautogui — cross-platform screen-capture helper  
 
 ---
 
-## License
+## Contributing
 
-- **Code License**: This project's code is licensed under the [MIT License](LICENSE).
-- **Usage Terms**: By using this application, you agree to our [Terms of Use](TERMS_OF_USE.md), which prohibit using this tool for cheating in chess games.
-- Chess piece icons CC BY-SA 3.0 from Wikimedia Commons.
+Pull requests are welcome! For larger changes, please open an issue first to discuss what you would like to change.
+
+---
+
+## License & Usage
+
+This project is licensed under the MIT License (see `LICENSE`).
+
+By using Chess Scanner you also agree to the [Terms of Use](TERMS_OF_USE.md), which *strictly forbid* employing the software for real-time engine assistance during rated, competitive, or otherwise fair-play chess games.

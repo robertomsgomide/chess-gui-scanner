@@ -98,12 +98,17 @@ class MainWindow(QMainWindow):
             fen = labels_to_fen(final_labels, side)
             self.info_label.setText("Board corrected. FEN: " + fen)
 
-            # train on the user's corrected squares:
-            self.classifier.train_on_data(squares_imgs_2d, final_labels)
+            # train on the user's corrected squares with position context:
+            side = editor.get_side_to_move()
+            castling_rights = editor.get_castling_rights()
+            ep_field = editor.get_ep_field()
+            self.classifier.train_on_data(squares_imgs_2d, final_labels, side, castling_rights, ep_field)
             
             # Save the orientation and side to move for future predictions
-            final_is_flipped = editor.is_flipped and editor.coords_switched  # Logical AND - true flipped state
-            self.analyzer.save_training_data(final_labels, final_is_flipped, side)
+            # Determine true board orientation: if coords are switched relative to flip state, 
+            # then the board orientation is the opposite of is_flipped
+            final_is_flipped = editor.is_flipped
+            self.analyzer.save_training_data(final_labels, final_is_flipped)
 
         else:
             self.info_label.setText("Editing canceled.")
