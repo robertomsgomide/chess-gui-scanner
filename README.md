@@ -1,6 +1,6 @@
 # Chess Scanner
 
-Capture any chessboard from your screen and analyse it instantly — fully offline.
+Capture any chessboard from your screen and analyse it instantly :)
 
 ![Demo screenshot](https://github.com/user-attachments/assets/ee66a5ea-194d-4cfd-a25f-23cf86c1842f)
 
