@@ -1,6 +1,0 @@
-# Keep this directory in the repository but ignore its contents
-# Ignore everything
-*
-
-# Except the .gitkeep file
-!.gitkeep
