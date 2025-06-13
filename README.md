@@ -2,7 +2,7 @@
 
 Capture any chessboard from your screen and analyse it instantly — fully offline.
 
-![Demo screenshot](docs/demo.gif)
+![Demo screenshot](ezgif-342af4bc073321.gif)
 
 ## Highlights
 
@@ -48,8 +48,8 @@ pip install -r requirements.txt
 python main.py
 ```
 
-1. Press **Capture Board** and draw a rectangle around the chessboard on screen.  
-2. Verify / correct the automatically recognised position.  
+1. Press **Capture Board** and draw a rectangle around the chessboard on screen, or simply click **Auto Detect Board** for a quicker snapshot.
+2. Verify / correct the automatically recognised position.
 3. Click **Analyse** to let the engine examine the position.
 
 ### Keyboard shortcuts
@@ -71,6 +71,7 @@ chess-scanner/
 ├─ BoardAnalyzer.py      # Heuristic + k-NN orientation predictor
 ├─ CNNClassifier.py      # PyTorch piece classifier
 ├─ SnipOverlay.py        # Full-screen capture overlay
+├─ AutoDetector.py       # Automatic board detection
 ├─ main.py               # Entry point
 ├─ engine/               # Place UCI engines here
 └─ icons/                # Piece bitmaps
@@ -86,6 +87,7 @@ chess-scanner/
 • python-chess — FEN generation & engine communication  
 • numpy — feature extraction  
 • pyautogui — cross-platform screen-capture helper  
+• OpenCV — automatic board detection and image processing
 
 ---
 
