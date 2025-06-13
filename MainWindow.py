@@ -1,5 +1,6 @@
 import os
 import pyautogui
+import time
 from BoardEditor import BoardEditor
 from SnipOverlay import SnipOverlay
 from labels import labels_to_fen
@@ -8,6 +9,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import (QPixmap, QImage, QIcon)
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QPushButton,
                               QLabel, QVBoxLayout, QDialog, QApplication)
+from AutoDetector import AutoDetector
 
 
 #########################################
@@ -36,14 +38,19 @@ class MainWindow(QMainWindow):
         self.edit_btn.setEnabled(False)
         self.edit_btn.clicked.connect(self.on_edit)
 
+        self.auto_btn = QPushButton("Auto Detect Board")
+        self.auto_btn.clicked.connect(self.on_auto_detect)
+
         layout.addWidget(self.info_label)
         layout.addWidget(self.capture_btn)
+        layout.addWidget(self.auto_btn)
         layout.addWidget(self.preview_label)
         layout.addWidget(self.edit_btn)
 
         self.classifier = classifier
         self.analyzer = BoardAnalyzer()  # New board analyzer
         self.captured_pil = None
+        self.detector = AutoDetector()
         self.resize(500,500)
 
     def on_capture(self):
@@ -64,6 +71,7 @@ class MainWindow(QMainWindow):
         cropped = shot.crop((left, top, right, bottom))
         self.captured_pil = cropped
         self.show()
+        QApplication.processEvents()
         self.info_label.setText("Board captured.")
         self.show_preview(cropped)
         self.edit_btn.setEnabled(True)
@@ -138,3 +146,30 @@ class MainWindow(QMainWindow):
             labels_2d.append(row_lbls)
             squares_2d.append(row_imgs)
         return labels_2d, squares_2d
+
+    def on_auto_detect(self):
+        """Automatically locate a chessboard on the screen, then display it exactly like a manual capture."""
+        # Hide the GUI while taking the screenshot so it won't be captured
+        self.hide()
+        QApplication.processEvents()
+         # Add a small delay (e.g., 300ms) to ensure the window is fully hidden
+        time.sleep(0.3)
+
+        screenshot = pyautogui.screenshot()
+
+        # Show the GUI again immediately
+        self.show()
+        # Let Qt finish laying out widgets so preview_label reports correct size
+        QApplication.processEvents()
+
+        bbox = self.detector.detect_board(screenshot)
+        if bbox is None:
+            self.info_label.setText("Board not detected. Try manual capture.")
+            return
+
+        left, top, right, bottom = bbox
+        cropped = screenshot.crop((left, top, right, bottom))
+        self.captured_pil = cropped
+        self.info_label.setText("Board auto-detected.")
+        self.show_preview(cropped)
+        self.edit_btn.setEnabled(True)

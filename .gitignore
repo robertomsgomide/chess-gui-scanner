@@ -1,0 +1,14 @@
+# Ignore all contents of the engine directory...
+/engine/*
+
+# ...but make an exception for the .gitkeep file to ensure the folder exists
+!/engine/.gitkeep
+
+# Ignore generated model, data, and configuration files
+*.pt
+*.pkl
+*.json
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
