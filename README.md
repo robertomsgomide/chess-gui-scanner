@@ -2,7 +2,7 @@
 
 Capture any chessboard from your screen and analyse it instantly — fully offline.
 
-![Demo screenshot](ezgif-342af4bc073321.gif)
+![Demo screenshot](https://github.com/user-attachments/assets/ee66a5ea-194d-4cfd-a25f-23cf86c1842f)
 
 ## Highlights
 
