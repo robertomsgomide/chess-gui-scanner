@@ -1,5 +1,5 @@
 from labels import (get_piece_pixmap)
-from PyQt5.QtCore import (Qt, QMimeData, QSize, QRect)
+from PyQt5.QtCore import (Qt, QMimeData, QSize, QRect, pyqtSignal)
 from PyQt5.QtWidgets import QWidget
 from PyQt5.QtGui import (QPainter, QColor, QPixmap, QDrag)
 
@@ -22,8 +22,19 @@ class BoardSquareWidget(QWidget):
     - supports drag & drop
     - supports double-click for piece memory
     - highlights when pieces are dragged over
+    
+    Now uses signals instead of direct references to BoardEditor for better decoupling.
     """
-    def __init__(self, row, col, piece_label="empty", parent=None):
+    
+    # Signals for communicating with parent
+    squareClicked = pyqtSignal(int, int, int)  # row, col, button
+    squareRightClicked = pyqtSignal(int, int)  # row, col
+    squareDoubleClicked = pyqtSignal(int, int)  # row, col
+    pieceDragStarted = pyqtSignal(int, int, str)  # row, col, piece_label
+    pieceDropped = pyqtSignal(int, int, int, int, str)  # from_row, from_col, to_row, to_col, piece_label
+    enPassantSquareClicked = pyqtSignal(int, int)  # row, col
+    
+    def __init__(self, row, col, piece_label="empty", parent=None, is_palette=False):
         super().__init__(parent)
         self.row = row
         self.col = col
@@ -32,11 +43,13 @@ class BoardSquareWidget(QWidget):
         self.setContentsMargins(0, 0, 0, 0)  # Remove any internal margins
         self.setStyleSheet("padding: 0px; margin: 0px; border: 0px; border-width: 0px;")  # Ensure no CSS styling adds spacing
         self.setAcceptDrops(True)
-        self.board_editor = parent  # might be None if used differently
         self.highlight = False  # For en-passant
         self.drag_highlight = False  # For drag operations
         self.hover_highlight = False  # For cursor hover with remembered piece
-        self.is_palette = False  # Flag for palette pieces, set by BoardEditor
+        self.is_palette = is_palette  # Flag for palette pieces
+        self.is_memory_highlighted = False  # For remembered piece highlight
+        self.ep_highlight_on = False  # En passant highlight state
+        self.ep_possible = {}  # En passant possible squares
     
     def sizeHint(self):
         # Ensure we return exactly our fixed size with no extra margins
@@ -53,6 +66,15 @@ class BoardSquareWidget(QWidget):
     def set_hover_highlight(self, on: bool):
         self.hover_highlight = on
         self.update()
+        
+    def set_memory_highlight(self, on: bool):
+        self.is_memory_highlighted = on
+        self.update()
+        
+    def set_ep_state(self, highlight_on: bool, possible_squares: dict):
+        """Set en passant highlighting state"""
+        self.ep_highlight_on = highlight_on
+        self.ep_possible = possible_squares
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -70,8 +92,8 @@ class BoardSquareWidget(QWidget):
             p.fillRect(extended_rect, base)
         else:
             # Use the parent widget's background color for palette pieces
-            if self.board_editor:
-                p.fillRect(extended_rect, self.board_editor.palette().color(self.board_editor.backgroundRole()))
+            if self.parent():
+                p.fillRect(extended_rect, self.parent().palette().color(self.parent().backgroundRole()))
             else:
                 p.fillRect(extended_rect, Qt.lightGray)
 
@@ -84,7 +106,7 @@ class BoardSquareWidget(QWidget):
             p.fillRect(extended_rect, DRAG_HIGHLIGHT_COLOR)
         
         # Highlight if this is the currently remembered piece
-        if hasattr(self.board_editor, 'remembered_piece') and self.board_editor.remembered_piece == self.piece_label and self.is_palette:
+        if self.is_memory_highlighted and self.is_palette:
             p.fillRect(extended_rect, MEMORY_HIGHLIGHT_COLOR)
 
         # piece icon
@@ -95,10 +117,7 @@ class BoardSquareWidget(QWidget):
         
     def enterEvent(self, event):
         """Handle mouse entering the widget - for cursor highlight"""
-        if (hasattr(self.board_editor, 'remembered_piece') and 
-            self.board_editor.remembered_piece and 
-            self.row >= 0):  # Only highlight board squares, not palette
-            self.set_hover_highlight(True)
+        # This will be handled by the parent now via signals
         super().enterEvent(event)
     
     def leaveEvent(self, event):
@@ -108,92 +127,28 @@ class BoardSquareWidget(QWidget):
 
     def mousePressEvent(self, event):
         # First check for en passant selection
-        if (self.board_editor and
-            self.board_editor.ep_highlight_on and
-            (self.row, self.col) in self.board_editor.ep_possible):
-            self.board_editor.on_ep_square_clicked(self.row, self.col)
+        if self.ep_highlight_on and (self.row, self.col) in self.ep_possible:
+            self.enPassantSquareClicked.emit(self.row, self.col)
             return
         
-        # If left-clicking on a palette piece and there's a remembered piece, clear it
-        if (event.button() == Qt.LeftButton and 
-            self.is_palette and 
-            hasattr(self.board_editor, 'remembered_piece') and 
-            self.board_editor.remembered_piece):
-            self.board_editor.clear_remembered_piece()
-            return
+        # Emit click signal with button information
+        self.squareClicked.emit(self.row, self.col, event.button())
         
-        # If right-clicking anywhere and there's a remembered piece, clear it
-        if (event.button() == Qt.RightButton and 
-            hasattr(self.board_editor, 'remembered_piece') and 
-            self.board_editor.remembered_piece):
-            self.board_editor.clear_remembered_piece()
-            # Don't return here - let right-click continue to erase pieces if on board
-            
-        # Handle right-click for erasing a piece (Edit mode only)
-        if (event.button() == Qt.RightButton and self.row >= 0 and
-            self.board_editor and 
-            hasattr(self.board_editor, 'state_controller') and 
-            self.board_editor.state_controller.is_edit_mode):
-            if self.piece_label != "empty":
-                self.piece_label = "empty"
-                self.update()
-                if self.board_editor:               # keep FEN in sync, etc.
-                    self.board_editor.sync_squares_to_model()
-                    # Save state after erasing a piece
-                    if hasattr(self.board_editor, 'save_state'):
-                        self.board_editor.save_state()
+        # Handle right-click
+        if event.button() == Qt.RightButton:
+            self.squareRightClicked.emit(self.row, self.col)
             return  # stop; no drag on right click
-            
-        # If left-clicking on a board square and we have a remembered piece (Edit mode only)
-        if (event.button() == Qt.LeftButton and 
-            self.row >= 0 and 
-            hasattr(self.board_editor, 'remembered_piece') and 
-            self.board_editor.remembered_piece and
-            self.board_editor and 
-            hasattr(self.board_editor, 'state_controller') and 
-            self.board_editor.state_controller.is_edit_mode):
-            # Place the remembered piece
-            self.piece_label = self.board_editor.remembered_piece
-            self.update()
-            if self.board_editor:
-                self.board_editor.sync_squares_to_model()
-                # Save state after placing a remembered piece
-                if hasattr(self.board_editor, 'save_state'):
-                    self.board_editor.save_state()
-            return
-
-        # Check if we're in play mode and this is a left-click on a board square
-        if (self.board_editor and 
-            hasattr(self.board_editor, 'state_controller') and 
-            self.board_editor.state_controller.is_play_mode and
-            event.button() == Qt.LeftButton and 
-            self.row >= 0):
-            
-            # For empty squares, handle as click-to-move
-            if self.piece_label == "empty":
-                self.board_editor.handle_play_mode_click(self.row, self.col)
-                return
-            
-            # For pieces, check if we can start a drag operation
-            can_drag = self.board_editor.start_play_mode_drag(self.row, self.col)
-            if not can_drag:
-                # If we can't drag, treat as a click (might be wrong player's piece)
-                self.board_editor.handle_play_mode_click(self.row, self.col)
-                return
-            
-            # Continue with drag operation below
         
-        # Otherwise do normal drag behavior for Edit mode or valid Play mode drags
+        # Handle drag initiation for left-click
         if event.button() == Qt.LeftButton and (self.row < 0 or self.piece_label != "empty"):
-            piece_being_dragged = self.piece_label
+            # Signal that a drag is starting
+            self.pieceDragStarted.emit(self.row, self.col, self.piece_label)
             
-            # In Play mode, we've already validated the piece can move
-            # In Edit mode, allow any piece to be dragged
+            # Temporarily clear the piece for visual feedback during drag
+            piece_being_dragged = self.piece_label
             if self.row >= 0:
                 self.piece_label = "empty"
                 self.update()
-                if self.board_editor:
-                    self.board_editor.sync_squares_to_model()
 
             drag = QDrag(self)
             mime = QMimeData()
@@ -216,22 +171,11 @@ class BoardSquareWidget(QWidget):
             if result != Qt.MoveAction and self.row >= 0:
                 self.piece_label = piece_being_dragged
                 self.update()
-                if self.board_editor:
-                    self.board_editor.sync_squares_to_model()
-            
-            # Clear play mode highlights after drag operation
-            if (self.board_editor and 
-                hasattr(self.board_editor, 'state_controller') and 
-                self.board_editor.state_controller.is_play_mode):
-                self.board_editor.clear_play_mode_drag_highlights()
 
     def mouseDoubleClickEvent(self, event):
-        """Handle double-click to remember a piece"""
-        if event.button() == Qt.LeftButton and self.is_palette and hasattr(self.board_editor, 'set_remembered_piece'):
-            # Toggle or set piece memory on double-click for palette pieces
-            self.board_editor.set_remembered_piece(self.piece_label)
-            self.update()  # Update to show selection highlight
-            return
+        """Handle double-click"""
+        if event.button() == Qt.LeftButton:
+            self.squareDoubleClicked.emit(self.row, self.col)
         super().mouseDoubleClickEvent(event)
 
     def dragEnterEvent(self, event):
@@ -244,14 +188,12 @@ class BoardSquareWidget(QWidget):
         self.set_drag_highlight(False)
         super().dragLeaveEvent(event)
 
-    # This was previously aliased, but we need different behavior now
     def dragMoveEvent(self, event):
         if event.mimeData().hasFormat("application/x-chess-piece"):
             if self.row >= 0:  # Only highlight board squares, not palette
                 self.set_drag_highlight(True)
             event.acceptProposedAction()
 
-    # handle drop: clear origin, place here, sync board state
     def dropEvent(self, event):
         # Clear highlight when dropping
         self.set_drag_highlight(False)
@@ -259,60 +201,9 @@ class BoardSquareWidget(QWidget):
         data = bytes(event.mimeData().data("application/x-chess-piece")).decode()
         src_r, src_c, lbl = data.split(',')
         src_r, src_c = int(src_r), int(src_c)
-
-        # Check if we're in Play mode and need to validate the move
-        if (self.board_editor and 
-            hasattr(self.board_editor, 'state_controller') and 
-            self.board_editor.state_controller.is_play_mode and
-            src_r >= 0):  # Only validate board-to-board moves, not palette drops
-            
-            # Check if this move is legal
-            move = self.board_editor.is_play_mode_move_legal(src_r, src_c, self.row, self.col)
-            if not move:
-                # Illegal move - reject the drop
-                event.ignore()
-                return
-            
-            # Legal move - execute it
-            internal_board = self.board_editor.board_model.get_internal_board()
-            san = internal_board.san(move)
-            internal_board.push(move)
-            
-            # Record in PGN manager
-            self.board_editor.pgn_manager.add_move(move, san)
-            
-            # Update the board display from the model
-            self.board_editor.sync_model_to_squares()
-            self.board_editor.refresh_ui_from_model()
-            
-            # Update undo button
-            self.board_editor.play_undo_btn.setEnabled(True)
-            
-            # Clear play mode highlights
-            self.board_editor.clear_play_mode_drag_highlights()
-            
-            event.acceptProposedAction()
-            return
-
-        # Edit mode or palette drops - use original behavior
-        # clear origin square if it was on the board
-        if src_r >= 0:
-            origin_sq = self.board_editor.squares[src_r][src_c]
-            origin_sq.piece_label = "empty"
-            origin_sq.update()
-
-        # place piece on this square
-        self.piece_label = lbl
-        self.update()
-
-        # keep BoardEditor's 2‑D state in sync for FEN, flips, etc.
-        self.board_editor.sync_squares_to_model()
         
-        # Save state after dragging and dropping a piece (Edit mode only)
-        if (hasattr(self.board_editor, 'save_state') and
-            self.board_editor and 
-            hasattr(self.board_editor, 'state_controller') and 
-            self.board_editor.state_controller.is_edit_mode):
-            self.board_editor.save_state()
-
+        # Emit the drop signal
+        self.pieceDropped.emit(src_r, src_c, self.row, self.col, lbl)
+        
+        # The parent will decide whether to accept or reject the drop
         event.acceptProposedAction()
