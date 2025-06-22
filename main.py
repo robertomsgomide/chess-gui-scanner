@@ -3,157 +3,572 @@ import os
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtGui import QPalette, QColor, QIcon
 from PyQt5.QtCore import Qt, QSettings
-from labels import *
-from CNNClassifier import *
-from BoardSquareWidget import *
-from BoardEditor import *
-from SnipOverlay import *
-from MainWindow import *
+from labels import initialize_icons, set_dark_mode
+from CNNClassifier import CNNClassifier
+from MainWindow import MainWindow
 from BoardAnalyzer import BoardAnalyzer
 
 
 def set_fusion_dark_theme(app):
-    """Apply a modern dark fusion theme to the application"""
+    """Apply a modern dark fusion theme matching VS Code Dark+ style"""
     app.setStyle("Fusion")
     
-    # Dark palette
+    # Set dark mode flag for icon system
+    set_dark_mode(True)
+    
+    # High contrast dark palette for better readability
     dark_palette = QPalette()
-    dark_palette.setColor(QPalette.Window, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.WindowText, Qt.white)
-    dark_palette.setColor(QPalette.Base, QColor(35, 35, 35))
-    dark_palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ToolTipBase, QColor(25, 25, 25))
-    dark_palette.setColor(QPalette.ToolTipText, Qt.white)
-    dark_palette.setColor(QPalette.Text, Qt.white)
-    dark_palette.setColor(QPalette.Button, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ButtonText, Qt.white)
-    dark_palette.setColor(QPalette.BrightText, Qt.red)
-    dark_palette.setColor(QPalette.Link, QColor(42, 130, 218))
-    dark_palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
-    dark_palette.setColor(QPalette.HighlightedText, Qt.black)
+    dark_palette.setColor(QPalette.Window, QColor(30, 30, 30))                # Main background
+    dark_palette.setColor(QPalette.WindowText, QColor(224, 224, 224))         # High contrast text (#E0E0E0)
+    dark_palette.setColor(QPalette.Base, QColor(38, 38, 38))                  # Input backgrounds (#262626)
+    dark_palette.setColor(QPalette.AlternateBase, QColor(40, 40, 40))         # Alternate rows
+    dark_palette.setColor(QPalette.ToolTipBase, QColor(45, 45, 45))           # Tooltip background
+    dark_palette.setColor(QPalette.ToolTipText, QColor(224, 224, 224))        # Tooltip text
+    dark_palette.setColor(QPalette.Text, QColor(224, 224, 224))               # Input text (#E0E0E0)
+    dark_palette.setColor(QPalette.Button, QColor(45, 45, 45))                # Button background
+    dark_palette.setColor(QPalette.ButtonText, QColor(224, 224, 224))         # Button text (#E0E0E0)
+    dark_palette.setColor(QPalette.BrightText, QColor(255, 100, 100))         # Error text
+    dark_palette.setColor(QPalette.Link, QColor(100, 150, 230))               # Links
+    dark_palette.setColor(QPalette.Highlight, QColor(0, 120, 215))            # Selection (VS Code blue)
+    dark_palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))    # Selected text
+    
+    # Disabled state colors
+    dark_palette.setColor(QPalette.Disabled, QPalette.WindowText, QColor(94, 94, 94))   # #5E5E5E
+    dark_palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(94, 94, 94))   # #5E5E5E
+    dark_palette.setColor(QPalette.Disabled, QPalette.Text, QColor(94, 94, 94))         # #5E5E5E
+    dark_palette.setColor(QPalette.Disabled, QPalette.Button, QColor(35, 35, 35))
     
     app.setPalette(dark_palette)
     
-    # Additional stylesheet for fine-tuning
+    # Comprehensive dark theme stylesheet with improved contrast
     app.setStyleSheet("""
-        QToolTip { 
-            color: #ffffff; 
-            background-color: #2a82da; 
-            border: 1px solid white; 
+        /* Global focus removal - kill all blue rings */
+        * {
+            outline: none;
         }
+        *:focus {
+            outline: none;
+        }
+        /* Global font settings */
+        * {
+            font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, "Roboto", "Helvetica Neue", Arial, sans-serif;
+            font-weight: 400;
+        }
+        
+        /* Headings use medium weight */
+        QLabel[accessibleName="heading"], QGroupBox::title {
+            font-weight: 500;
+        }
+        
+        /* Main window and dialogs */
+        QMainWindow, QDialog {
+            background-color: #1e1e1e;
+            color: #e0e0e0;
+        }
+        
+        /* Tooltips */
+        QToolTip { 
+            color: #e0e0e0; 
+            background-color: #2d2d2d; 
+            border: 1px solid #454545;
+            padding: 6px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+        }
+        
+        /* Buttons with emergency patch colors */
         QPushButton { 
-            background-color: #353535; 
-            border: 1px solid #5c5c5c;
-            padding: 5px;
-            border-radius: 3px;
+            background-color: #2d2d2d; 
+            border: 1px solid #393939;
+            color: #f0f0f0;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 13px;
         }
         QPushButton:hover { 
-            background-color: #454545; 
+            background-color: #2f2f2f; 
+            border-color: #393939;
         }
         QPushButton:pressed { 
-            background-color: #252525; 
+            background-color: #262626; 
         }
-        QMessageBox { 
-            background-color: #353535; 
+        QPushButton:disabled {
+            background-color: #232323;
+            color: #5e5e5e;
+            border-color: #3a3a3a;
+        }
+        QPushButton:focus {
+            outline: none;
+        }
+        
+        /* Text inputs and text areas */
+        QLineEdit, QTextEdit, QPlainTextEdit {
+            background-color: #262626;
+            border: 1px solid #454545;
+            color: #e0e0e0;
+            selection-background-color: #0078d4;
+            selection-color: #ffffff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
+            border-color: #0078d4;
+            outline: none;
+        }
+        QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {
+            background-color: #1a1a1a;
+            color: #5e5e5e;
+            border-color: #3a3a3a;
+        }
+        
+        /* Labels */
+        QLabel {
+            color: #e0e0e0;
+            font-size: 13px;
+        }
+        QLabel:disabled {
+            color: #5e5e5e;
+        }
+        
+        /* Chess board container - raised card for better contrast */
+        QFrame[accessibleName="boardContainer"], QWidget[accessibleName="boardContainer"] {
+            background-color: #262626;
+            border: 1px solid #454545;
+            border-radius: 8px;
+        }
+        
+        /* Reduce icon panel padding */
+        QFrame[accessibleName="iconPanel"], QWidget[accessibleName="iconPanel"] {
+            padding: 4px;
+            margin: 2px;
+            background-color: #262626;
+        }
+        
+        /* Checkboxes and radio buttons */
+        QCheckBox, QRadioButton {
+            color: #e0e0e0;
+            spacing: 8px;
+            font-size: 13px;
+        }
+        QCheckBox:disabled, QRadioButton:disabled {
+            color: #5e5e5e;
+        }
+        QCheckBox::indicator, QRadioButton::indicator {
+            width: 18px;
+            height: 18px;
+            background-color: #262626;
+            border: 2px solid #454545;
+        }
+        QCheckBox::indicator {
+            border-radius: 4px;
+        }
+        QCheckBox::indicator:checked {
+            background-color: #0078d4;
+            border-color: #0078d4;
+        }
+        QCheckBox::indicator:focus {
+            outline: none;
+        }
+        QRadioButton::indicator {
+            border-radius: 9px;
+        }
+        QRadioButton::indicator:checked {
+            background-color: #0078d4;
+            border-color: #0078d4;
+        }
+        QRadioButton::indicator:focus {
+            outline: none;
+        }
+        
+        /* Scrollbars */
+        QScrollBar:vertical {
+            background-color: #2d2d2d;
+            width: 12px;
+            border: none;
+        }
+        QScrollBar::handle:vertical {
+            background-color: #454545;
+            border-radius: 6px;
+            min-height: 20px;
+            margin: 2px;
+        }
+        QScrollBar::handle:vertical:hover {
+            background-color: #565656;
+        }
+        QScrollBar:horizontal {
+            background-color: #2d2d2d;
+            height: 12px;
+            border: none;
+        }
+        QScrollBar::handle:horizontal {
+            background-color: #454545;
+            border-radius: 6px;
+            min-width: 20px;
+            margin: 2px;
+        }
+        QScrollBar::handle:horizontal:hover {
+            background-color: #565656;
+        }
+        QScrollBar::add-line, QScrollBar::sub-line {
+            border: none;
+            background: none;
+        }
+        
+        /* Menu bars and menus */
+        QMenuBar {
+            background-color: #2d2d2d;
+            color: #e0e0e0;
+            border-bottom: 1px solid #454545;
+            padding: 2px;
+            font-weight: 500;
+        }
+        QMenuBar::item {
+            padding: 6px 12px;
+            border-radius: 6px;
+        }
+        QMenuBar::item:selected {
+            background-color: #383838;
+        }
+        QMenu {
+            background-color: #2d2d2d;
+            color: #e0e0e0;
+            border: 1px solid #454545;
+            border-radius: 8px;
+            padding: 4px;
+        }
+        QMenu::item {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        QMenu::item:selected {
+            background-color: #0078d4;
+        }
+        
+        /* Message boxes */
+        QMessageBox {
+            background-color: #1e1e1e;
+            color: #e0e0e0;
+        }
+        
+        /* Group boxes with better spacing */
+        QGroupBox {
+            font-weight: 500;
+            font-size: 14px;
+            color: #e0e0e0;
+            border: 1px solid #454545;
+            border-radius: 8px;
+            margin: 8px 0px;
+            padding-top: 12px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 8px;
+            padding: 0px 8px;
+            color: #e0e0e0;
+        }
+        
+        /* Table and list widgets for better contrast */
+        QTableWidget, QListWidget, QTreeWidget {
+            background-color: #262626;
+            alternate-background-color: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #454545;
+            border-radius: 6px;
+        }
+        QTableWidget::item, QListWidget::item, QTreeWidget::item {
+            padding: 4px;
+            border: none;
+        }
+        QTableWidget::item:selected, QListWidget::item:selected, QTreeWidget::item:selected {
+            background-color: #0078d4;
+            color: #ffffff;
+        }
+        
+        /* Headers */
+        QHeaderView::section {
+            background-color: #2d2d2d;
+            color: #e0e0e0;
+            border: 1px solid #454545;
+            padding: 6px;
+            font-weight: 500;
         }
     """)
 
 def set_fusion_light_theme(app):
-    """Apply a modern light fusion theme to the application"""
+    """Apply a modern flat light theme inspired by Material 3 and macOS Sonoma"""
     app.setStyle("Fusion")
     
-    # Light palette with blue accents
+    # Set light mode flag for icon system
+    set_dark_mode(False)
+    
+    # Clean light palette with high contrast
     light_palette = QPalette()
-    light_palette.setColor(QPalette.Window, QColor(240, 240, 240))
-    light_palette.setColor(QPalette.WindowText, QColor(0, 0, 0))
-    light_palette.setColor(QPalette.Base, QColor(255, 255, 255))
-    light_palette.setColor(QPalette.AlternateBase, QColor(233, 231, 227))
-    light_palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
-    light_palette.setColor(QPalette.ToolTipText, QColor(0, 0, 0))
-    light_palette.setColor(QPalette.Text, QColor(0, 0, 0))
-    light_palette.setColor(QPalette.Button, QColor(240, 240, 240))
-    light_palette.setColor(QPalette.ButtonText, QColor(0, 0, 0))
-    light_palette.setColor(QPalette.BrightText, QColor(255, 0, 0))
-    light_palette.setColor(QPalette.Link, QColor(0, 100, 200))
-    light_palette.setColor(QPalette.Highlight, QColor(38, 110, 183))
-    light_palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
+    light_palette.setColor(QPalette.Window, QColor(250, 250, 250))            # Clean background #FAFAFA
+    light_palette.setColor(QPalette.WindowText, QColor(28, 28, 28))           # High contrast text
+    light_palette.setColor(QPalette.Base, QColor(255, 255, 255))              # Input backgrounds
+    light_palette.setColor(QPalette.AlternateBase, QColor(245, 245, 245))     # Alternate rows
+    light_palette.setColor(QPalette.ToolTipBase, QColor(248, 248, 248))       # Tooltip background
+    light_palette.setColor(QPalette.ToolTipText, QColor(28, 28, 28))          # Tooltip text
+    light_palette.setColor(QPalette.Text, QColor(28, 28, 28))                 # Input text
+    light_palette.setColor(QPalette.Button, QColor(255, 255, 255))            # Button background (flat white)
+    light_palette.setColor(QPalette.ButtonText, QColor(28, 28, 28))           # Button text
+    light_palette.setColor(QPalette.BrightText, QColor(200, 50, 50))          # Error text
+    light_palette.setColor(QPalette.Link, QColor(0, 120, 215))                # Links (primary accent)
+    light_palette.setColor(QPalette.Highlight, QColor(0, 120, 215))           # Selection accent
+    light_palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))   # Selected text
+    
+    # Disabled state colors
+    light_palette.setColor(QPalette.Disabled, QPalette.WindowText, QColor(140, 140, 140))
+    light_palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(140, 140, 140))
+    light_palette.setColor(QPalette.Disabled, QPalette.Text, QColor(140, 140, 140))
+    light_palette.setColor(QPalette.Disabled, QPalette.Button, QColor(248, 248, 248))
     
     app.setPalette(light_palette)
     
-    # Additional stylesheet for fine-tuning
+    # Modern flat light theme stylesheet with Material Design influences
     app.setStyleSheet("""
-        QToolTip { 
-            color: #000000; 
-            background-color: #ffffff; 
-            border: 1px solid #bdbdbd; 
+        /* Global focus removal - kill all blue rings */
+        * {
+            outline: none;
         }
+        *:focus {
+            outline: none;
+        }
+        /* Global font settings */
+        * {
+            font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, "Roboto", "Helvetica Neue", Arial, sans-serif;
+            font-weight: 400;
+        }
+        
+        /* Headings use medium weight */
+        QLabel[accessibleName="heading"], QGroupBox::title {
+            font-weight: 500;
+        }
+        
+        /* Main window and dialogs */
+        QMainWindow, QDialog {
+            background-color: #fafafa;
+            color: #1c1c1c;
+        }
+        
+        /* Tooltips */
+        QToolTip { 
+            color: #1c1c1c; 
+            background-color: #ffffff; 
+            border: 1px solid #e0e0e0;
+            padding: 6px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+        }
+        
+        /* Buttons - completely flat design with Material-style elevation */
         QPushButton { 
-            background-color: #f0f0f0; 
-            border: 1px solid #bdbdbd;
-            padding: 5px;
-            border-radius: 3px;
+            background-color: #ffffff; 
+            border: 1px solid #dddddd;
+            color: #1c1c1c;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 13px;
         }
         QPushButton:hover { 
-            background-color: #e0e0e0; 
+            background-color: #f8f8f8; 
+            border-color: #bdbdbd;
         }
         QPushButton:pressed { 
-            background-color: #d0d0d0; 
+            background-color: #f0f0f0; 
+        }
+        QPushButton:disabled {
+            background-color: #f8f8f8;
+            color: #8c8c8c;
+            border-color: #e8e8e8;
+        }
+        QPushButton:focus {
+            outline: none;
+        }
+        
+        /* Primary accent buttons */
+        QPushButton[accessibleName="primary"] {
+            background-color: #0078d7;
+            color: #ffffff;
+            border-color: #0078d7;
+        }
+        QPushButton[accessibleName="primary"]:hover {
+            background-color: #106ebe;
+            border-color: #106ebe;
+        }
+        
+        /* Text inputs and text areas */
+        QLineEdit, QTextEdit, QPlainTextEdit {
+            background-color: #ffffff;
+            border: 1px solid #dddddd;
+            color: #1c1c1c;
+            selection-background-color: #0078d7;
+            selection-color: #ffffff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
+            border-color: #0078d7;
+            outline: none;
+        }
+        QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {
+            background-color: #f8f8f8;
+            color: #8c8c8c;
+            border-color: #e8e8e8;
+        }
+        
+        /* Labels */
+        QLabel {
+            color: #1c1c1c;
+            font-size: 13px;
+        }
+        QLabel:disabled {
+            color: #8c8c8c;
+        }
+        
+        /* Reduce icon panel padding */
+        QFrame[accessibleName="iconPanel"], QWidget[accessibleName="iconPanel"] {
+            padding: 4px;
+            margin: 2px;
+        }
+        
+        /* Chess board container - add card elevation */
+        QFrame[accessibleName="boardContainer"], QWidget[accessibleName="boardContainer"] {
+            background-color: #ffffff;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+        }
+        
+        /* Checkboxes and radio buttons */
+        QCheckBox, QRadioButton {
+            color: #1c1c1c;
+            spacing: 8px;
+            font-size: 13px;
+        }
+        QCheckBox:disabled, QRadioButton:disabled {
+            color: #8c8c8c;
+        }
+        QCheckBox::indicator, QRadioButton::indicator {
+            width: 18px;
+            height: 18px;
+            background-color: #ffffff;
+            border: 2px solid #dddddd;
+        }
+        QCheckBox::indicator {
+            border-radius: 4px;
+        }
+        QCheckBox::indicator:checked {
+            background-color: #0078d7;
+            border-color: #0078d7;
+        }
+        QCheckBox::indicator:focus {
+            outline: none;
+        }
+        QRadioButton::indicator {
+            border-radius: 9px;
+        }
+        QRadioButton::indicator:checked {
+            background-color: #0078d7;
+            border-color: #0078d7;
+        }
+        QRadioButton::indicator:focus {
+            outline: none;
+        }
+        
+        /* Scrollbars - minimal flat design */
+        QScrollBar:vertical {
+            background-color: transparent;
+            width: 12px;
+            border: none;
+        }
+        QScrollBar::handle:vertical {
+            background-color: #cccccc;
+            border-radius: 6px;
+            min-height: 20px;
+            margin: 2px;
+        }
+        QScrollBar::handle:vertical:hover {
+            background-color: #999999;
+        }
+        QScrollBar:horizontal {
+            background-color: transparent;
+            height: 12px;
+            border: none;
+        }
+        QScrollBar::handle:horizontal {
+            background-color: #cccccc;
+            border-radius: 6px;
+            min-width: 20px;
+            margin: 2px;
+        }
+        QScrollBar::handle:horizontal:hover {
+            background-color: #999999;
+        }
+        QScrollBar::add-line, QScrollBar::sub-line {
+            border: none;
+            background: none;
+        }
+        
+        /* Menu bars and menus */
+        QMenuBar {
+            background-color: #ffffff;
+            color: #1c1c1c;
+            border-bottom: 1px solid #e0e0e0;
+            padding: 2px;
+            font-weight: 500;
+        }
+        QMenuBar::item {
+            padding: 6px 12px;
+            border-radius: 6px;
+        }
+        QMenuBar::item:selected {
+            background-color: #f0f0f0;
+        }
+        QMenu {
+            background-color: #ffffff;
+            color: #1c1c1c;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 4px;
+        }
+        QMenu::item {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        QMenu::item:selected {
+            background-color: #0078d7;
+            color: #ffffff;
+        }
+        
+        /* Message boxes */
+        QMessageBox {
+            background-color: #ffffff;
+            color: #1c1c1c;
+        }
+        
+        /* Group boxes with better spacing */
+        QGroupBox {
+            font-weight: 500;
+            font-size: 14px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            margin: 8px 0px;
+            padding-top: 12px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 8px;
+            padding: 0px 8px;
         }
     """)
 
-def set_chess_wooden_theme(app):
-    """Apply a chess-themed style with wooden colors"""
-    app.setStyle("Fusion")
-    
-    # Warm wooden palette
-    wooden_palette = QPalette()
-    wooden_palette.setColor(QPalette.Window, QColor(240, 220, 180))           # Light wood
-    wooden_palette.setColor(QPalette.WindowText, QColor(70, 35, 10))          # Dark brown text
-    wooden_palette.setColor(QPalette.Base, QColor(255, 250, 240))             # Light cream
-    wooden_palette.setColor(QPalette.AlternateBase, QColor(230, 210, 175))    # Alternate wood
-    wooden_palette.setColor(QPalette.ToolTipBase, QColor(253, 248, 228))      # Light cream
-    wooden_palette.setColor(QPalette.ToolTipText, QColor(70, 35, 10))         # Dark brown
-    wooden_palette.setColor(QPalette.Text, QColor(70, 35, 10))                # Dark brown text
-    wooden_palette.setColor(QPalette.Button, QColor(210, 180, 140))           # Medium wood
-    wooden_palette.setColor(QPalette.ButtonText, QColor(70, 35, 10))          # Dark brown
-    wooden_palette.setColor(QPalette.BrightText, QColor(180, 0, 0))           # Deep red
-    wooden_palette.setColor(QPalette.Link, QColor(150, 80, 0))                # Brown links
-    wooden_palette.setColor(QPalette.Highlight, QColor(190, 100, 30))         # Highlight wood
-    wooden_palette.setColor(QPalette.HighlightedText, QColor(255, 250, 240))  # Light cream
-    
-    app.setPalette(wooden_palette)
-    
-    # Wooden-themed stylesheet
-    app.setStyleSheet("""
-        QMainWindow {
-            background-color: #f0deb4;
-        }
-        QToolTip { 
-            color: #462306; 
-            background-color: #fdf8e4; 
-            border: 1px solid #d2b48c; 
-        }
-        QPushButton { 
-            background-color: #d2b48c; 
-            border: 1px solid #b38b50;
-            padding: 5px;
-            border-radius: 3px;
-            color: #462306;
-            font-weight: bold;
-        }
-        QPushButton:hover { 
-            background-color: #c2a478; 
-        }
-        QPushButton:pressed { 
-            background-color: #b28b58; 
-        }
-        QLabel {
-            color: #462306;
-        }
-        QDialog {
-            background-color: #f0deb4;
-        }
-    """)
+
 
 def show_terms_dialog():
     terms = """
@@ -195,10 +610,9 @@ def main():
     if not settings.value("terms_accepted", False, type=bool):
         show_terms_dialog()
     
-    # Choose one of these themes (comment out the others)
-    # set_fusion_dark_theme(app)    # Modern dark theme
-    set_fusion_light_theme(app)   # Modern light theme
-    # set_chess_wooden_theme(app)   # Chess-themed wooden colors
+    # Choose one of these themes (comment out the other)
+    # set_fusion_dark_theme(app)    # Modern dark theme (VS Code Dark+ style)
+    set_fusion_light_theme(app)     # Modern light theme (Material 3 / macOS Sonoma style)
     
     classifier = CNNClassifier()
     

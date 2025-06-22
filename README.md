@@ -1,17 +1,18 @@
 # Chess Scanner
 
-Capture any chessboard from your screen and analyse it instantly — fully offline.
+Capture any chessboard from your screen and analyze it instantly — fully offline.
 
 ![Demo screenshot](ezgif-342af4bc073321.gif)
 
 ## Highlights
 
 • Screen overlay with 8×8 grid for pixel-perfect selection  
-• Lightweight CNN recognises every square (~0.9 M parameters)  
-• Smart heuristics predict board orientation *and* side-to-move  
-• Feature-rich editor (drag-and-drop, sticky pieces, auto-castling & en-passant)  
+• Lightweight CNN recognizes every square (~0.9 M parameters)  
+• Smart heuristics predict board orientation and side-to-move  
+• Feature-rich editor with drag-and-drop, undo/redo, and position validation  
+• Edit and Play modes with move recording and PGN export  
+• UCI engine integration (Stockfish, Berserk, etc.) with navigable analysis lines  
 • Continuous learning – every manual correction can be stored as training data  
-• UCI engine integration (Stockfish, Berserk, etc.) for instant evaluation  
 • Works on Windows, Linux and macOS – **no internet connection required**
 
 ---
@@ -38,7 +39,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-4. (Optional) place your favourite UCI engine executable (e.g. `stockfish.exe`) in the `engine/` folder.
+4. (Optional) place your favorite UCI engine executable (e.g. `stockfish.exe`) in the `engine/` folder.
 
 ---
 
@@ -48,9 +49,9 @@ pip install -r requirements.txt
 python main.py
 ```
 
-1. Press **Capture Board** and draw a rectangle around the chessboard on screen, or simply click **Auto Detect Board** for a quicker snapshot.
-2. Verify / correct the automatically recognised position.
-3. Click **Analyse** to let the engine examine the position.
+1. Press **Capture Board** and draw a rectangle around the chessboard on screen, or click **Auto Detect Board** for automatic detection.
+2. Verify / correct the automatically recognized position in Edit mode.
+3. Click **Finish Edit** to enter Play mode for making moves, or use **Analysis** to examine the position with an engine.
 
 ### Keyboard shortcuts
 
@@ -67,12 +68,20 @@ python main.py
 
 ```
 chess-scanner/
-├─ BoardEditor.py        # GUI for editing / analysing positions
-├─ BoardAnalyzer.py      # Heuristic + k-NN orientation predictor
+├─ main.py               # Entry point
+├─ MainWindow.py         # Main application window
+├─ BoardEditor.py        # Position editor and play interface
+├─ ChessBoardModel.py    # Core board state management
+├─ StateController.py    # Edit/Play mode management
+├─ AnalysisManager.py    # Engine analysis and navigation
+├─ HistoryManager.py     # Undo/redo functionality
+├─ PgnManager.py         # Move recording and PGN export
 ├─ CNNClassifier.py      # PyTorch piece classifier
+├─ BoardAnalyzer.py      # Heuristic orientation predictor
 ├─ SnipOverlay.py        # Full-screen capture overlay
 ├─ AutoDetector.py       # Automatic board detection
-├─ main.py               # Entry point
+├─ BoardSquareWidget.py  # Individual square widgets
+├─ labels.py             # Piece definitions and utilities
 ├─ engine/               # Place UCI engines here
 └─ icons/                # Piece bitmaps
 ```

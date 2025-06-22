@@ -1,10 +1,13 @@
 import os
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPixmap, QPainter, QColor
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ICON_DIR = os.path.join(BASE_DIR, "icons")
+
+# Global variable to track if we're in dark mode
+_is_dark_mode = False
 
 #########################################
 # Chess Data
@@ -33,12 +36,25 @@ PIECE_ICON_PATHS = {
 }
 
 PIECE_ICONS = {}
+PIECE_ICONS_DARK = {}  # Use original PNGs exactly as stored
+
+def set_dark_mode(dark_mode: bool):
+    """Set whether we're in dark mode - called from theme initialization"""
+    global _is_dark_mode
+    _is_dark_mode = dark_mode
+
+def is_dark_mode() -> bool:
+    """Check if we're currently in dark mode"""
+    return _is_dark_mode
 
 def initialize_icons():
     """Load all piece icons once at startup."""
     for label, path in PIECE_ICON_PATHS.items():
         pm = QPixmap(path)
         PIECE_ICONS[label] = pm
+        
+        # Use original PNGs exactly as stored for both light and dark modes
+        PIECE_ICONS_DARK[label] = pm
 
 def get_piece_pixmap(label: str) -> QPixmap:
     """Return the QPixmap for 'label', or blank if 'empty'."""
@@ -46,7 +62,11 @@ def get_piece_pixmap(label: str) -> QPixmap:
         blank = QPixmap(60, 60)
         blank.fill(Qt.transparent)
         return blank
-    pix = PIECE_ICONS.get(label)
+        
+    # Choose the appropriate icon set based on current theme
+    icon_set = PIECE_ICONS_DARK if _is_dark_mode else PIECE_ICONS
+    pix = icon_set.get(label)
+    
     if not pix:
         fallback = QPixmap(60, 60)
         fallback.fill(Qt.red)

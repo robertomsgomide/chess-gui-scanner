@@ -92,12 +92,11 @@ class MainWindow(QMainWindow):
         # slice the captured PIL into 8 squares
         labels_2d, squares_imgs_2d = self.do_recognition(self.captured_pil)
         
-        # Analyze the position to predict orientation and side to move
-        predicted_is_flipped = self.analyzer.predict_orientation(labels_2d)
+        # Analyze the position to predict side to move
         predicted_side_to_move = self.analyzer.predict_side_to_move(labels_2d)
         
-        # Create editor with predictions
-        editor = BoardEditor(labels_2d, predicted_is_flipped, predicted_side_to_move)
+        # Create editor with prediction (orientation is auto-detected by ChessBoardModel)
+        editor = BoardEditor(labels_2d, predicted_side_to_move)
         
         if editor.exec_() == QDialog.Accepted:
             # the user pressed "Learn"
@@ -109,13 +108,12 @@ class MainWindow(QMainWindow):
             # train on the user's corrected squares with position context:
             side = editor.get_side_to_move()
             castling_rights = editor.get_castling_rights()
-            ep_field = editor.get_ep_field()
+            ep_field = getattr(editor, 'ep_selected', '-') or '-'
             self.classifier.train_on_data(squares_imgs_2d, final_labels, side, castling_rights, ep_field)
             
             # Save the orientation and side to move for future predictions
-            # Determine true board orientation: if coords are switched relative to flip state, 
-            # then the board orientation is the opposite of is_flipped
-            final_is_flipped = editor.is_flipped
+            # Use the board model's current orientation state
+            final_is_flipped = editor.board_model.is_display_flipped
             self.analyzer.save_training_data(final_labels, final_is_flipped)
 
         else:

@@ -1,17 +1,20 @@
 import os
 import sys
 import chess
-import chess.engine
-import copy
-import re
 from BoardSquareWidget import BoardSquareWidget
-from labels import (PIECE_LABELS, labels_to_fen, get_piece_pixmap)
+from labels import (PIECE_LABELS, get_piece_pixmap)
+from ChessBoardModel import ChessBoardModel
+from HistoryManager import HistoryManager
+from AnalysisManager import AnalysisManager
+from StateController import StateController, BoardState
+from PgnManager import PgnManager
 from PyQt5.QtCore import Qt, QEvent, QSettings
 from PyQt5.QtGui import QIcon, QCursor
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QLabel,
     QVBoxLayout, QDialog, QGridLayout, QMessageBox, QHBoxLayout,
-    QCheckBox, QRadioButton, QButtonGroup, QWhatsThis, QAction, QMenu, QFileDialog, QSizePolicy
+    QCheckBox, QRadioButton, QButtonGroup, QWhatsThis, QAction, QMenu, 
+    QFileDialog, QSizePolicy, QTextEdit, QScrollArea
 )
 
 
@@ -25,28 +28,34 @@ class BoardEditor(QDialog):
         • Clear Board   • Flip Board   • Switch Coord   • Reset
         • Copy FEN      • Learn        • right-hand Stockfish Analysis panel
     """
-    def __init__(self, labels_2d, predicted_is_flipped=False, predicted_side_to_move='w'):
+    def __init__(self, labels_2d, predicted_side_to_move='w'):
         super().__init__()
         self.setWindowTitle("Board Editor")
         self.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.CustomizeWindowHint |
                             Qt.WindowCloseButtonHint | Qt.WindowContextHelpButtonHint)
+        
+        # Initialize the board model (single source of truth)
+        self.board_model = ChessBoardModel(labels_2d)
+        self.board_model.set_side_to_move(predicted_side_to_move)
+        
+        # Initialize managers
+        self.history_manager = HistoryManager(self.board_model)
+        self.analysis_manager = AnalysisManager()
+        self.state_controller = StateController()
+        self.pgn_manager = PgnManager()
+        
+        # Set up callbacks
+        self.history_manager.set_update_callback(self.update_undo_redo_buttons)
+        self.analysis_manager.set_update_display_callback(self.update_analysis_display)
+        self.analysis_manager.set_update_board_callback(self.update_board_from_model)
+        self.state_controller.set_state_change_callback(self.on_state_changed)
+        self.pgn_manager.set_update_callback(self.update_move_list_display)
         
         # Settings storage for user preferences
         self.settings = QSettings("ChessAIScanner", "Settings")
         
         # Initialize piece memory feature
         self.remembered_piece = None  # Currently remembered piece
-        self.piece_cursor = None  # Custom cursor for remembered piece
-        
-        # Initialize undo/redo history
-        self.history = []  # List to store board states
-        self.current_index = -1  # Current position in history
-        
-        # Store original/current board state for analysis navigation
-        self.original_labels_2d = None  # Will store a copy of the initial position
-        self.original_side_to_move = None  # Will store the initial side to move
-        self.analysis_board = None  # Chess board for position tracking
-        self.analysis_positions = [[], [], []]  # Store board states for each analysis line
         
         # Disable automatic "What's this?" on right-click
         self.setContextMenuPolicy(Qt.PreventContextMenu)
@@ -58,20 +67,24 @@ class BoardEditor(QDialog):
 
         # Define help text in just one place
         self.help_text = """<b>Chess Board Editor - quick help</b><br>
+<br>
+<b>Edit Mode (default):</b><br>
 • Drag pieces from the palette onto the board.<br>
 • Right-click a square to erase it.<br>
 • Double-click a piece in the palette to select it for repeated placement.<br>
 • <i>Flip Board</i> changes the point of view.<br>
-• <i>Copy FEN</i> copies the current position to the clipboard.<br>
-• <i>Analysis</i> runs engine on the position.<br>
-• Click the ▼ button next to Analysis to select different chess engines.<br>
-• <i>Undo</i> restores the previous board position.<br>
-• <i>Redo</i> restores a previously undone position.<br>
+• <i>Undo/Redo</i> restore previous board positions.<br>
 • Use the castling checkboxes to control O-O and O-O-O rights.<br>
-- They're only enabled when the king and rook are on their starting squares.<br>
 • To enable <i>en passant</i>, tick the box when a capture is available.<br>
-- Then click the highlighted square to select the target.<br>
-• The board orientation and side to move are automatically predicted.<br>"""
+• Click <i>Finish Edit</i> to enter Play mode.<br>
+<br>
+<b>Play Mode:</b><br>
+• Click pieces to select and see legal moves highlighted.<br>
+• Click a highlighted square to make the move.<br>
+• <i>Undo</i> takes back the last move.<br>
+• <i>Copy PGN</i> copies the game notation to clipboard.<br>
+• <i>Analysis</i> runs engine on the current position.<br>
+• Click <i>Edit Board</i> to return to Edit mode.<br>"""
 
         # icon paths
         base_icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
@@ -86,15 +99,14 @@ class BoardEditor(QDialog):
         undo_path = ip("Chess_undo.png")
         redo_path = ip("Chess_redo.png")
 
-        # internal board state
-        self.labels_2d    = [row[:] for row in labels_2d]   # deep‑copy
-        # Board orientation (True means the board currently shown is flipped – Black at the bottom)
-        # Use the predictor result so later conversions to FEN know whether the board must be un-flipped.
-        self.is_flipped   = predicted_is_flipped
-        self.coords_switched = False # coordinate labels flipped?
-
-        self.file_labels = list("abcdefgh")   # default from White side
-        self.rank_labels = list("87654321")   # "
+        # Coordinate labels - sync with board model orientation
+        self.file_labels = list("abcdefgh")
+        self.rank_labels = list("87654321")
+        
+        # Apply board model orientation to coordinate labels
+        if self.board_model.is_display_flipped:
+            self.file_labels.reverse()
+            self.rank_labels.reverse()
 
         outer = QHBoxLayout(self)
         left  = QVBoxLayout()       # board + controls
@@ -117,7 +129,7 @@ class BoardEditor(QDialog):
         self.ep_cb.setEnabled(False)
         self.ep_cb.stateChanged.connect(lambda state: (self.clear_remembered_piece(), self.on_ep_toggled(state)))
         top_row.addWidget(self.ep_cb)
-        self.ep_possible   = {}   # {(r,c): "e3", ...}
+        self.ep_possible   = {}   # {(r,c): "e3", ...} - changed from ep_pawn_candidates
         self.ep_selected   = None # "e3"  (FEN field) or None
         self.ep_highlight_on = False
 
@@ -159,13 +171,14 @@ class BoardEditor(QDialog):
             self.grid.setColumnStretch(i, 1)
         
         self.squares = []
+        display_labels = self.board_model.get_display_labels()
         for r in range(8):
             # rank label
             rank_lbl = QLabel(self.rank_labels[r]); rank_lbl.setAlignment(Qt.AlignCenter)
             self.grid.addWidget(rank_lbl, r+1, 0)
             row_widgets = []
             for c in range(8):
-                sq = BoardSquareWidget(r, c, self.labels_2d[r][c], parent=self)
+                sq = BoardSquareWidget(r, c, display_labels[r][c], parent=self)
                 self.grid.addWidget(sq, r+1, c+1)
                 row_widgets.append(sq)
             self.squares.append(row_widgets)
@@ -240,14 +253,20 @@ class BoardEditor(QDialog):
         self.flip_btn   = add_btn("Flip Board",   flip_path,   self.on_flip_board)
         self.switch_btn = add_btn("Switch",       switch_path, self.on_switch_coords)
         
-        self.reset_btn  = add_btn("Reset",        None,        self.on_reset_to_start)
+        self.reset_btn  = add_btn("Set To Opening",        None,        self.on_reset_to_start)
         self.copy_btn   = add_btn("Copy FEN",     clip_path,   self.on_copy_fen)
         self.paste_btn  = add_btn("Paste FEN",    paste_path,  self.on_paste_fen)
+        self.copy_pgn_btn = add_btn("Copy PGN",   clip_path,   self.on_copy_pgn)
         self.learn_btn  = add_btn("Learn",        nn_path,     self.accept)
         btn_bar.addStretch()
 
         # analysis column
         right = QVBoxLayout(); outer.addLayout(right)
+        
+        # Add Finish Edit / Edit Board button
+        self.state_toggle_btn = QPushButton("Finish Edit")
+        self.state_toggle_btn.clicked.connect(lambda: (self.clear_remembered_piece(), self.on_state_toggle()))
+        right.addWidget(self.state_toggle_btn)
         
         # Create analysis button group with dropdown
         analysis_container = QWidget()
@@ -284,23 +303,10 @@ class BoardEditor(QDialog):
         self.reset_analysis_btn.setEnabled(False)  # Initially disabled until analysis is run
         right.addWidget(self.reset_analysis_btn)
         
-        # Variable to store the selected engine
-        self.selected_engine = None
-        
-        # Load last used engine from settings
-        last_engine = self.settings.value("last_used_engine", None)
-        if last_engine:
-            engine_dir = os.path.join(os.path.dirname(__file__), "engine")
-            engine_path = os.path.join(engine_dir, last_engine)
-            if os.path.exists(engine_path):
-                self.selected_engine = last_engine
-                # Update the UI to show the loaded engine
-                if os.path.sep in last_engine:
-                    display_name = os.path.basename(last_engine)
-                    display_name = os.path.splitext(display_name)[0]
-                else:
-                    display_name = os.path.splitext(last_engine)[0]
-                self.analysis_btn.setText(f"Analysis ({display_name})")
+        # Update analysis button text if engine is loaded
+        engine_name = self.analysis_manager.get_selected_engine_name()
+        if engine_name:
+            self.analysis_btn.setText(f"Analysis ({engine_name})")
         
         # Create navigable analysis lines
         self.analysis_lines = []
@@ -343,151 +349,177 @@ class BoardEditor(QDialog):
         
         right.addWidget(analysis_view_container, 1)
         self.analysis_view_container = analysis_view_container
+        
+        # Move list panel (for Play mode)
+        self.move_list_container = QWidget()
+        move_list_layout = QVBoxLayout(self.move_list_container)
+        move_list_layout.setContentsMargins(5, 5, 5, 5)
+        
+        # Move list header
+        move_list_header = QLabel("Move List")
+        move_list_header.setAlignment(Qt.AlignCenter)
+        move_list_header.setStyleSheet("font-weight: bold;")
+        move_list_layout.addWidget(move_list_header)
+        
+        # Move list text area
+        self.move_list_text = QTextEdit()
+        self.move_list_text.setReadOnly(True)
+        self.move_list_text.setFixedWidth(260)
+        self.move_list_text.setMinimumHeight(150)
+        move_list_layout.addWidget(self.move_list_text)
+        
+        # Undo button for Play mode (will be moved here from main button bar)
+        self.play_undo_btn = QPushButton("Undo Last Move")
+        self.play_undo_btn.clicked.connect(lambda: (self.clear_remembered_piece(), self.on_undo()))
+        self.play_undo_btn.setToolTip("Undo the last move played")
+        move_list_layout.addWidget(self.play_undo_btn)
+        
+        right.addWidget(self.move_list_container)
+        self.move_list_container.hide()  # Initially hidden
+        
         right.addStretch()
 
-        # Auto-apply predicted orientation
-        if predicted_is_flipped:
-            self.on_switch_coords()  # Apply predicted board orientation
+        # Initialize UI state variables needed for en passant
+        self.ep_possible = {}  # Changed from ep_pawn_candidates to match provided implementation
+        self.ep_selected = None
+        self.ep_highlight_on = False
         
-        # initialise UI‑dependent states
-        self.refresh_castling_checkboxes()
+        # Initialize UI-dependent states
+        self.refresh_ui_from_model()
         
         # Save initial state to history
         self.save_state()
         
         # Use the same help text for What's This instead of duplicating it
         self.setWhatsThis(self.help_text)
+        
+        # Apply initial Edit state UI settings
+        self.apply_edit_state_ui()
 
-    # just some helpers
-    def sync_squares_to_labels(self):
+    # Helper methods
+    def sync_squares_to_model(self):
+        """Sync the UI squares with the board model"""
         for r in range(8):
             for c in range(8):
-                self.labels_2d[r][c] = self.squares[r][c].piece_label
+                piece_label = self.squares[r][c].piece_label
+                self.board_model.set_piece_at_display_coords(r, c, piece_label)
+        self.refresh_ui_from_model()
+
+    def sync_model_to_squares(self):
+        """Sync the board model to UI squares"""
+        display_labels = self.board_model.get_display_labels()
+        for r in range(8):
+            for c in range(8):
+                self.squares[r][c].piece_label = display_labels[r][c]
+                self.squares[r][c].update()
+
+    def refresh_ui_from_model(self):
+        """Refresh UI elements from the current board model state"""
         self.refresh_castling_checkboxes()
         self.refresh_en_passant()
+        
+        # Update side to move radio buttons
+        side = self.board_model.get_side_to_move()
+        self.white_rb.setChecked(side == 'w')
+        self.black_rb.setChecked(side == 'b')
 
     def save_state(self):
         """Save current board state to history"""
-        self.sync_squares_to_labels()
-        
-        # Create a state object with just the board position
-        state = {
-            'labels_2d': copy.deepcopy(self.labels_2d)
-        }
-        
-        # If we're not at the end of the history, truncate it
-        if self.current_index < len(self.history) - 1:
-            self.history = self.history[:self.current_index + 1]
-        
-        # Add new state to history
-        self.history.append(state)
-        self.current_index = len(self.history) - 1
-        
-        # Update button states
-        self.update_undo_redo_buttons()
-
-    def restore_state(self, state):
-        """Restore board to a saved state"""
-        # Restore board position only
-        self.labels_2d = copy.deepcopy(state['labels_2d'])
-        for r in range(8):
-            for c in range(8):
-                self.squares[r][c].piece_label = self.labels_2d[r][c]
-                self.squares[r][c].update()
-        
-        # Refresh UI
-        self.refresh_castling_checkboxes()
-        self.refresh_en_passant()
-        
-        # Update button states
-        self.update_undo_redo_buttons()
+        self.sync_squares_to_model()
+        self.history_manager.save_state(self.board_model)
 
     def update_undo_redo_buttons(self):
         """Update the enabled state of undo/redo buttons"""
-        self.undo_btn.setEnabled(self.current_index > 0)
-        self.redo_btn.setEnabled(self.current_index < len(self.history) - 1)
+        self.undo_btn.setEnabled(self.history_manager.can_undo())
+        self.redo_btn.setEnabled(self.history_manager.can_redo())
 
     def on_undo(self):
-        """Restore the previous board state"""
-        if self.current_index > 0:
-            self.current_index -= 1
-            self.restore_state(self.history[self.current_index])
+        """Restore the previous board state or undo last move"""
+        if self.state_controller.is_edit_mode:
+            # Edit mode: use history manager for board state undo
+            restored_state = self.history_manager.undo()
+            if restored_state:
+                self.board_model = restored_state
+                self.sync_model_to_squares()
+                self.refresh_ui_from_model()
+        else:
+            # Play mode: undo last move
+            move = self.pgn_manager.undo_last_move()
+            if move:
+                # Revert the move on the internal board
+                internal_board = self.board_model.get_internal_board()
+                internal_board.pop()
+                
+                # Update display
+                self.sync_model_to_squares()
+                self.refresh_ui_from_model()
+                
+                # Update undo button state
+                self.play_undo_btn.setEnabled(self.pgn_manager.has_moves())
 
     def on_redo(self):
         """Restore the next board state"""
-        if self.current_index < len(self.history) - 1:
-            self.current_index += 1
-            self.restore_state(self.history[self.current_index])
+        restored_state = self.history_manager.redo()
+        if restored_state:
+            self.board_model = restored_state
+            self.sync_model_to_squares()
+            self.refresh_ui_from_model()
 
     def on_clear_board(self):
-        for r in range(8):
-            for c in range(8):
-                self.squares[r][c].piece_label = "empty"
-                self.squares[r][c].update()
-        self.refresh_castling_checkboxes()
+        """Clear all pieces from the board"""
+        self.board_model.clear_board()
+        self.sync_model_to_squares()
+        self.refresh_ui_from_model()
         self.save_state()
 
     def on_flip_board(self):
-        self.labels_2d.reverse(); [row.reverse() for row in self.labels_2d]
-        for r in range(8):
-            for c in range(8):
-                self.squares[r][c].piece_label = self.labels_2d[r][c]
-                self.squares[r][c].update()
-        self.file_labels.reverse(); self.rank_labels.reverse()
+        """Flip the board orientation and update display"""
+        self.board_model.flip_display_orientation()
+        
+        # Update coordinate labels
+        self.file_labels.reverse()
+        self.rank_labels.reverse()
         for r in range(8):
             self.grid.itemAtPosition(r+1, 0).widget().setText(self.rank_labels[r])
         for c in range(8):
             self.grid.itemAtPosition(9, c+1).widget().setText(self.file_labels[c])
-        self.is_flipped = not self.is_flipped
-        self.coords_switched = not self.coords_switched
+        
+        # Update squares to reflect new orientation
+        self.sync_model_to_squares()
+        self.refresh_ui_from_model()
         self.save_state()
 
     def on_switch_coords(self):
-        self.file_labels.reverse(); self.rank_labels.reverse()
+        """Switch coordinate labels only (not board orientation)"""
+        self.file_labels.reverse()
+        self.rank_labels.reverse()
         for r in range(8):
             self.grid.itemAtPosition(r+1, 0).widget().setText(self.rank_labels[r])
         for c in range(8):
             self.grid.itemAtPosition(9, c+1).widget().setText(self.file_labels[c])
-        self.coords_switched = not self.coords_switched
-        # Don't toggle is_flipped - this is just a coordinate label fix, not a board orientation change
-        self.refresh_castling_checkboxes()
-        self.refresh_en_passant()
-        self.save_state()
+        self.refresh_ui_from_model()
 
     def on_reset_to_start(self):
-        standard = [
-            ["br","bn","bb","bq","bk","bb","bn","br"],
-            ["bp"]*8,
-            ["empty"]*8,
-            ["empty"]*8,
-            ["empty"]*8,
-            ["empty"]*8,
-            ["wp"]*8,
-            ["wr","wn","wb","wq","wk","wb","wn","wr"]
-        ]
-        if self.is_flipped:
-            std = [row[::-1] for row in standard[::-1]]
-        else:
-            std = [row[:] for row in standard]
-        self.labels_2d = [row[:] for row in std]
-        for r in range(8):
-            for c in range(8):
-                self.squares[r][c].piece_label = self.labels_2d[r][c]
-                self.squares[r][c].update()
-        self.refresh_castling_checkboxes()
+        """Reset to standard chess starting position"""
+        self.board_model.reset_to_starting_position()
+        self.sync_model_to_squares()
+        self.refresh_ui_from_model()
         self.save_state()
 
     def on_copy_fen(self):
-        self.sync_squares_to_labels()
-        effective = [row[:] for row in self.labels_2d]
-        # Convert from current display orientation to standard FEN orientation
-        # Standard FEN: rank 8 first (index 0), file a first (index 0)
-        if self.is_flipped:
-            # Un-flip the data to get it into standard orientation for the FEN
-            effective.reverse()
-            for row in effective:
-                row.reverse()
-        fen = labels_to_fen(effective, self.get_side_to_move(), self.get_castling_rights(), self.get_ep_field())
+        """Copy current position as FEN to clipboard"""
+        self.sync_squares_to_model()
+        
+        # Update board model with current UI state
+        self.board_model.set_side_to_move(self.get_side_to_move())
+        castling_rights = self.get_castling_rights()
+        self.board_model.set_castling_rights(castling_rights)
+        if hasattr(self, 'ep_selected') and self.ep_selected:
+            self.board_model.set_en_passant_square(self.ep_selected)
+        else:
+            self.board_model.set_en_passant_square(None)
+            
+        fen = self.board_model.get_fen()
         QApplication.clipboard().setText(fen)
         QMessageBox.information(self, "FEN copied", fen)
         
@@ -497,68 +529,13 @@ class BoardEditor(QDialog):
         fen_text = clipboard.text().strip()
         
         try:
-            # Attempt to create a chess board from the FEN to validate it
-            chess.Board(fen_text)  # Just validate, don't store
-            
-            # Extract the piece placement part of FEN (first part before the first space)
-            placement = fen_text.split(' ')[0]
-            ranks = placement.split('/')
-            
-            if len(ranks) != 8:
-                raise ValueError("Invalid FEN: must have 8 ranks")
-            
-            # Extract side to move (second part after first space)
-            parts = fen_text.split(' ')
-            if len(parts) >= 2:
-                side_to_move = parts[1]
-                if side_to_move == 'w':
-                    self.white_rb.setChecked(True)
-                    self.black_rb.setChecked(False)
-                elif side_to_move == 'b':
-                    self.white_rb.setChecked(False)
-                    self.black_rb.setChecked(True)
-            
-            # Extract castling rights (third part after second space)
-            if len(parts) >= 3:
-                castling = parts[2]
-                self.w_k_cb.setChecked('K' in castling)
-                self.w_q_cb.setChecked('Q' in castling)
-                self.b_k_cb.setChecked('k' in castling)
-                self.b_q_cb.setChecked('q' in castling)
-            
-            # Convert to our internal format (in standard orientation)
-            new_labels = []
-            for rank in ranks:
-                row = []
-                for char in rank:
-                    if char.isdigit():
-                        # Add empty squares
-                        row.extend(["empty"] * int(char))
-                    else:
-                        # Convert piece character to our label format
-                        piece_color = 'w' if char.isupper() else 'b'
-                        piece_type = char.lower()
-                        if piece_type == 'p':
-                            row.append(f"{piece_color}p")
-                        elif piece_type == 'n':
-                            row.append(f"{piece_color}n")
-                        elif piece_type == 'b':
-                            row.append(f"{piece_color}b")
-                        elif piece_type == 'r':
-                            row.append(f"{piece_color}r")
-                        elif piece_type == 'q':
-                            row.append(f"{piece_color}q")
-                        elif piece_type == 'k':
-                            row.append(f"{piece_color}k")
-                        else:
-                            row.append("empty")  # Fallback
-                new_labels.append(row)
+            # Set board from FEN (this validates it automatically)
+            self.board_model.set_from_fen(fen_text)
             
             # Reset to standard view orientation (White's POV) for consistency
             self.file_labels = list("abcdefgh")
             self.rank_labels = list("87654321")
-            self.is_flipped = False
-            self.coords_switched = False
+            self.board_model.is_display_flipped = False
             
             # Update coordinate labels in the UI
             for r in range(8):
@@ -566,82 +543,49 @@ class BoardEditor(QDialog):
             for c in range(8):
                 self.grid.itemAtPosition(9, c+1).widget().setText(self.file_labels[c])
             
-            # Update our labels and squares (new_labels is already in standard orientation)
-            if all(len(row) == 8 for row in new_labels):
-                self.labels_2d = new_labels
-                for r in range(8):
-                    for c in range(8):
-                        self.squares[r][c].piece_label = self.labels_2d[r][c]
-                        self.squares[r][c].update()
-                self.refresh_castling_checkboxes()
+            # Sync model to UI
+            self.sync_model_to_squares()
+            self.refresh_ui_from_model()
+            
+            # In Edit mode, save state to history
+            if self.state_controller.is_edit_mode:
                 self.save_state()
-                QMessageBox.information(self, "FEN Loaded", "FEN position loaded successfully")
             else:
-                QMessageBox.warning(self, "Invalid FEN", "FEN has incorrect number of squares")
+                # In Play mode, restart the game with new position
+                self.pgn_manager.start_new_game(self.board_model.get_fen())
+                self.update_move_list_display()
+                self.play_undo_btn.setEnabled(False)
+            
+            QMessageBox.information(self, "FEN Loaded", "FEN position loaded successfully")
         
         except Exception as e:
             QMessageBox.warning(self, "Invalid FEN", f"Could not parse FEN: {str(e)}")
 
     def show_engine_menu(self):
         """Display a popup menu with available UCI engines"""
-        # Find all engines in the engine folder
-        engine_dir = os.path.join(os.path.dirname(__file__), "engine")
         engine_menu = QMenu(self)
+        engines = self.analysis_manager.get_available_engines()
         
-        try:
-            if os.path.exists(engine_dir):
-                engines = []
-                
-                # Find executables on Windows (recursively search in subdirectories)
-                if sys.platform.startswith("win"):
-                    for root, dirs, files in os.walk(engine_dir):
-                        for file in files:
-                            if file.lower().endswith(".exe"):
-                                # Get path relative to engine directory for display
-                                rel_path = os.path.relpath(os.path.join(root, file), engine_dir)
-                                engines.append(rel_path)
-                # Find executables on macOS/Linux (recursively)
+        if engines:
+            # Create menu items for each engine
+            for engine in engines:
+                # Format display name - use just filename for top-level, show path for subdirectories
+                if os.path.sep in engine:
+                    display_name = engine  # Show full relative path for nested engines
                 else:
-                    for root, dirs, files in os.walk(engine_dir):
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            if os.path.isfile(file_path) and os.access(file_path, os.X_OK):
-                                rel_path = os.path.relpath(file_path, engine_dir)
-                                engines.append(rel_path)
-                
-                if engines:
-                    # Create menu items for each engine
-                    for engine in engines:
-                        # Format display name - use just filename for top-level, show path for subdirectories
-                        if os.path.sep in engine:
-                            display_name = engine  # Show full relative path for nested engines
-                        else:
-                            display_name = engine  # Just filename for top level engines
-                            
-                        action = engine_menu.addAction(display_name)
-                        action.triggered.connect(lambda checked, e=engine: self.select_engine(e))
-                else:
-                    # No engines found
-                    no_engine_action = engine_menu.addAction("No engines found")
-                    no_engine_action.setEnabled(False)
+                    display_name = engine  # Just filename for top level engines
                     
-                    # Add option to add a new engine
-                    engine_menu.addSeparator()
-                    add_engine_action = engine_menu.addAction("Add engine...")
-                    add_engine_action.triggered.connect(self.add_engine)
-            else:
-                # Engine directory doesn't exist
-                no_dir_action = engine_menu.addAction("Engine directory not found")
-                no_dir_action.setEnabled(False)
-                
-                # Add option to create directory and add engine
-                engine_menu.addSeparator()
-                create_dir_action = engine_menu.addAction("Create engine directory")
-                create_dir_action.triggered.connect(self.create_engine_directory)
-        except Exception as e:
-            # Error occurred
-            error_action = engine_menu.addAction(f"Error: {str(e)}")
-            error_action.setEnabled(False)
+                action = engine_menu.addAction(display_name)
+                action.triggered.connect(lambda checked, e=engine: self.select_engine(e))
+        else:
+            # No engines found
+            no_engine_action = engine_menu.addAction("No engines found")
+            no_engine_action.setEnabled(False)
+            
+            # Add option to add a new engine
+            engine_menu.addSeparator()
+            add_engine_action = engine_menu.addAction("Add engine...")
+            add_engine_action.triggered.connect(self.add_engine)
         
         # Show the menu
         pos = self.engine_dropdown_btn.mapToGlobal(self.engine_dropdown_btn.rect().bottomLeft())
@@ -649,48 +593,19 @@ class BoardEditor(QDialog):
     
     def select_engine(self, engine_name):
         """Set the selected engine"""
-        # Store the engine name
-        self.selected_engine = engine_name
+        success = self.analysis_manager.select_engine(engine_name)
         
-        # Save engine selection to settings
-        self.settings.setValue("last_used_engine", engine_name)
-        
-        # Update the analysis button text to show selected engine
-        # For engines in subdirectories, just show the filename without extension
-        if os.path.sep in engine_name:
-            # For nested engines, just show the filename
-            display_name = os.path.basename(engine_name)
-            display_name = os.path.splitext(display_name)[0]
+        if success:
+            # Update the analysis button text
+            display_name = self.analysis_manager.get_selected_engine_name()
+            if display_name:
+                self.analysis_btn.setText(f"Analysis ({display_name})")
         else:
-            # For top level engines
-            display_name = os.path.splitext(engine_name)[0]
-            
-        self.analysis_btn.setText(f"Analysis ({display_name})")
-        
-        # Test if the engine can be initialized properly
-        engine_dir = os.path.join(os.path.dirname(__file__), "engine")
-        engine_path = os.path.join(engine_dir, engine_name)
-        
-        if not self.test_engine_compatibility(engine_path):
-            # If there's a problem, show a warning but still allow selection
             QMessageBox.warning(
                 self, 
-                "Engine Warning", 
-                f"The engine '{display_name}' may not be compatible or may have issues.\n"
-                "It will remain selected, but may fail during analysis."
+                "Engine Error", 
+                f"Could not select engine '{engine_name}'. File may not exist."
             )
-            
-    def test_engine_compatibility(self, engine_path):
-        """Test if an engine can be properly initialized"""
-        try:
-            # Attempt to start the engine with a short timeout
-            engine = chess.engine.SimpleEngine.popen_uci(engine_path, timeout=2.0)
-            # If successful, close it properly
-            engine.quit()
-            return True
-        except Exception as e:
-            print(f"Engine compatibility test failed: {str(e)}")
-            return False
 
     def add_engine(self):
         """Open a file dialog to select an engine executable"""
@@ -739,371 +654,221 @@ class BoardEditor(QDialog):
             QMessageBox.critical(self, "Error", f"Failed to create engine directory: {str(e)}")
 
     def on_analysis(self):
-        """
-        Runs UCI engine at depth 20 and shows the top-3 PVs.
-        """
-        # Clear previous analysis
-        self.analysis_lines = []
-        self.selected_line_index = -1
-        self.current_move_indices = [0, 0, 0]  # Current position in each line
-        self.has_navigated = [False, False, False]  # Reset navigation flags
-        
-        # Reset line widgets
-        for widget in self.analysis_line_widgets:
-            widget.hide()
-            widget.setStyleSheet("padding: 5px; border: 1px solid transparent;")
-        
-        # Show the placeholder during analysis
+        """Run UCI engine analysis"""
+        # Show analyzing state
         self.placeholder_label.setText("Analyzing...")
         self.placeholder_label.show()
+        for widget in self.analysis_line_widgets:
+            widget.hide()
         
-        # Save the current board state before analysis
-        self.sync_squares_to_labels()
-        self.original_labels_2d = copy.deepcopy(self.labels_2d)
-        self.original_side_to_move = self.get_side_to_move()
-        
-        # Enable the reset button
-        self.reset_analysis_btn.setEnabled(True)
-        
-        # Clear previous positions
-        self.analysis_positions = [[], [], []]
-        
-        # find any engine in ./engine
-        engine_dir = os.path.join(os.path.dirname(__file__), "engine")
-        try:
-            engine_name = None
-            missing_engine = None
+        # In Edit mode, sync current state to model and update UI state
+        if self.state_controller.is_edit_mode:
+            self.sync_squares_to_model()
             
-            # First try to use the selected engine
-            if self.selected_engine:
-                engine_path = os.path.join(engine_dir, self.selected_engine)
-                if os.path.exists(engine_path):
-                    engine_name = self.selected_engine
-                else:
-                    # Remember the missing engine for a more informative message
-                    missing_engine = self.selected_engine
-                    # Reset the selected engine since it's missing
-                    self.selected_engine = None
-                    self.analysis_btn.setText("Analysis")
-                    # Also clear from settings so we don't try to load it again
-                    self.settings.remove("last_used_engine")
+            # Update board model with current UI state
+            self.board_model.set_side_to_move(self.get_side_to_move())
+            castling_rights = self.get_castling_rights()
+            self.board_model.set_castling_rights(castling_rights)  # Always set, even if "-"
+            if hasattr(self, 'ep_selected') and self.ep_selected:
+                self.board_model.set_en_passant_square(self.ep_selected)
+            else:
+                self.board_model.set_en_passant_square(None)  # Clear en passant if not selected
+        
+        # In Play mode, the board model is already up to date
+        
+        # Run analysis
+        success = self.analysis_manager.analyze_position(self.board_model)
+        
+        if success:
+            # Enable reset button
+            self.reset_analysis_btn.setEnabled(True)
             
-            # If no engine is currently selected, try to load last used engine from settings
-            if not engine_name:
-                last_engine = self.settings.value("last_used_engine", None)
-                if last_engine:
-                    last_engine_path = os.path.join(engine_dir, last_engine)
-                    if os.path.exists(last_engine_path):
-                        engine_name = last_engine
-                        self.selected_engine = last_engine
-                        # Update the UI to show the loaded engine
-                        if os.path.sep in last_engine:
-                            display_name = os.path.basename(last_engine)
-                            display_name = os.path.splitext(display_name)[0]
-                        else:
-                            display_name = os.path.splitext(last_engine)[0]
-                        self.analysis_btn.setText(f"Analysis ({display_name})")
-                    else:
-                        # Remember the missing engine for a more informative message
-                        missing_engine = last_engine
-                        # Clear from settings so we don't try to load it again
-                        self.settings.remove("last_used_engine")
-            
-            # If still no engine, search recursively for any available engine
-            if not engine_name:
-                # Search recursively in all subdirectories
-                for root, dirs, files in os.walk(engine_dir):
-                    if engine_name:
-                        break  # Stop once we found an engine
-                        
-                    if sys.platform.startswith("win"):
-                        # Look for .exe files on Windows
-                        for file in files:
-                            if file.lower().endswith(".exe"):
-                                # Get path relative to engine directory
-                                engine_name = os.path.relpath(os.path.join(root, file), engine_dir)
-                                break
-                    else:
-                        # Look for executable files on Unix
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            if os.path.isfile(file_path) and os.access(file_path, os.X_OK):
-                                engine_name = os.path.relpath(file_path, engine_dir)
-                                break
-                
-                if engine_name:
-                    # Update the selected engine
-                    self.select_engine(engine_name)
-                else:
-                    error_message = f"No UCI engine executable found in:\n  {engine_dir} or its subdirectories\n\n"
-                    if missing_engine:
-                        # Add information about the missing engine
-                        display_name = os.path.basename(missing_engine) if os.path.sep in missing_engine else missing_engine
-                        error_message = f"Previously selected engine '{display_name}' was not found.\n\n{error_message}"
-                    
-                    error_message += "Please add a chess engine (e.g. stockfish.exe) using the dropdown menu."
-                    
-                    QMessageBox.critical(self, "Engine not found", error_message)
-                    self.placeholder_label.setText("No engine available")
-                    return
-                    
-        except (StopIteration, FileNotFoundError):
-            QMessageBox.critical(
-                self, "Engine not found",
-                f"No UCI engine executable found in:\n  {engine_dir} or its subdirectories\n\n"
-                "Please add a chess engine (e.g. stockfish.exe) using the dropdown menu."
-            )
-            self.placeholder_label.setText("No engine available")
+            # Update display will be called by the analysis manager callback
+            # Set focus to first line widget
+            if self.analysis_line_widgets:
+                self.analysis_line_widgets[0].setFocus()
+        else:
+            self.placeholder_label.setText("Analysis failed")
+
+    def update_board_from_model(self, new_model: ChessBoardModel):
+        """Callback to update board from a new model (used by analysis manager)"""
+        self.board_model = new_model
+        self.sync_model_to_squares()
+        self.refresh_ui_from_model()
+
+    def update_analysis_display(self):
+        """Callback to update analysis display (used by analysis manager)"""
+        lines, selected_index, move_indices, has_navigated = self.analysis_manager.get_analysis_display_data()
+        
+        if not lines:
+            # Hide all line widgets and show placeholder
+            for widget in self.analysis_line_widgets:
+                widget.hide()
+            self.placeholder_label.setText("No analysis available")
+            self.placeholder_label.show()
             return
         
-        ANALYSIS_ENGINE_PATH = os.path.join(engine_dir, engine_name)
+        # Hide placeholder and show line widgets
+        self.placeholder_label.hide()
         
-        # build a FEN that matches the user's coordinate view
-        self.sync_squares_to_labels()
-        board_copy = [row[:] for row in self.labels_2d]
-        if self.is_flipped:
-            # Un-flip the data to get it into standard orientation for the FEN
-            board_copy.reverse()
-            for row in board_copy:
-                row.reverse()
-
-        fen = labels_to_fen(
-            board_copy,
-            self.get_side_to_move(),
-            self.get_castling_rights(),
-            self.get_ep_field()
-        )
-
-        # fire up the engine
-        try:
-            # Show a busy cursor during analysis
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            
-            # Use a longer timeout for potentially slow engines
-            engine = chess.engine.SimpleEngine.popen_uci(ANALYSIS_ENGINE_PATH, timeout=10.0)
-            
-            board = chess.Board(fen)
-            
-            # Store the starting board for position tracking
-            self.analysis_board = chess.Board(fen)
-
-            # Set a maximum time limit to prevent hanging on problematic engines
-            try:
-                info = engine.analyse(
-                    board,
-                    chess.engine.Limit(depth=20, time=10.0),  # Add time limit of 10 seconds
-                    multipv=3
-                )
+        # Update each line widget
+        for i, line in enumerate(lines):
+            if i < len(self.analysis_line_widgets):
+                widget = self.analysis_line_widgets[i]
                 
-                # build a nice text block
-                lines = []
-                for i, pv in enumerate(info, 1):
-                    score = pv["score"].white()  # always from white's viewpoint
-                    if score.is_mate():
-                        score_str = f"# {score.mate()}"
+                # Parse and highlight the line
+                highlighted_line = self._highlight_analysis_line(line, i, move_indices, has_navigated, selected_index)
+                widget.setText(highlighted_line)
+                widget.show()
+                
+                # Apply selection highlighting
+                if i == selected_index:
+                    widget.setStyleSheet("padding: 5px; border: 1px solid #666666; background-color: #e6f3ff; color: #000000;")
+                else:
+                    widget.setStyleSheet("padding: 5px; border: 1px solid transparent;")
+        
+        # Hide unused widgets
+        for i in range(len(lines), len(self.analysis_line_widgets)):
+            self.analysis_line_widgets[i].hide()
+
+    def _highlight_analysis_line(self, line: str, line_index: int, move_indices: list, has_navigated: list, selected_index: int) -> str:
+        """Apply highlighting to analysis line text with proper move-by-move highlighting"""
+        parts = line.split('|')
+        if len(parts) != 2:
+            return line
+        
+        score_part = parts[0].strip()
+        moves_part = parts[1].strip()
+        
+        # Only highlight if this is the selected line and user has navigated
+        if line_index == selected_index and has_navigated[line_index]:
+            current_move_idx = move_indices[line_index]
+            
+            # Parse moves from the algebraic notation
+            highlighted_moves = self._parse_and_highlight_moves(moves_part, current_move_idx)
+            return f"{score_part} | {highlighted_moves}"
+        
+        return line
+    
+    def _parse_and_highlight_moves(self, moves_text: str, current_move_idx: int) -> str:
+        """Parse algebraic notation and highlight the current move"""
+        if current_move_idx <= 0:
+            return moves_text
+            
+        # Split the moves while preserving the original format
+        # This regex matches move numbers (like "1.", "2.", etc.) and moves
+        import re
+        
+        # Pattern to match move numbers and moves
+        pattern = r'(\d+\.\.?\.?)\s*([^\s]+)(?:\s+([^\s]+))?'
+        matches = re.findall(pattern, moves_text)
+        
+        if not matches:
+            # Fallback: simple space-based splitting if regex fails
+            parts = moves_text.split()
+            if current_move_idx-1 < len(parts):
+                highlighted_parts = []
+                for i, part in enumerate(parts):
+                    if i == current_move_idx-1:
+                        highlighted_parts.append(f'<span style="background-color: yellow; font-weight: bold;">{part}</span>')
                     else:
-                        score_str = f"{score.score()/100:.2f}"
-                    san_line = board.variation_san(pv["pv"])
-                    lines.append(f"{i}.  {score_str}  |  {san_line}")
-                    
-                    # Generate positions for each move in this line
-                    current_positions = [chess.Board(fen)]  # Start with the initial position
-                    position_board = chess.Board(fen)
-                    
-                    for move in pv["pv"]:
-                        position_board.push(move)
-                        current_positions.append(chess.Board(position_board.fen()))
-                    
-                    # Store the positions for this line
-                    self.analysis_positions[i-1] = current_positions
-
-                # Store analysis lines
-                self.analysis_lines = lines
-                self.selected_line_index = 0
-                self.current_move_indices = [0, 0, 0]  # Current position in each line
-                
-                # Update the display
-                self.update_line_display()
-                
-                # Set focus to the first line
-                if self.analysis_line_widgets and len(self.analysis_line_widgets) > 0:
-                    self.analysis_line_widgets[0].setFocus()
-                
-            except chess.engine.EngineError as e:
-                QMessageBox.critical(self, "Engine analysis error", str(e))
-                self.placeholder_label.setText(f"Engine error: {str(e)}\nTry a different engine.")
-                
-            # Always make sure to quit the engine
-            try:
-                engine.quit()
-            except Exception:
-                # If engine already crashed, we may not be able to quit properly
-                pass
-                
-        except chess.engine.EngineTerminatedError as e:
-            QMessageBox.critical(
-                self, "Engine crash",
-                f"The engine '{os.path.splitext(engine_name)[0]}' crashed unexpectedly.\n\n"
-                f"Error: {str(e)}\n\n"
-                "Try selecting a different engine."
-            )
-            self.placeholder_label.setText("Engine crashed. Try a different engine.")
+                        highlighted_parts.append(part)
+                return ' '.join(highlighted_parts)
+            return moves_text
+        
+        # Reconstruct the move text with highlighting
+        highlighted_text = ""
+        move_count = 0
+        
+        for match in matches:
+            move_num, white_move, black_move = match
             
-        except Exception as e:
-            QMessageBox.critical(
-                self, "Engine error",
-                f"Error running engine: {str(e)}"
-            )
-            self.placeholder_label.setText(f"Error: {str(e)}")
+            # Add move number
+            highlighted_text += move_num + " "
             
-        finally:
-            # Always restore cursor
-            QApplication.restoreOverrideCursor()
-
-    def update_analysis_lines(self):
-        """Update the text in the analysis line widgets"""
-        # Just a shortcut method to update_line_display
-        self.update_line_display()
+            # Add white move
+            move_count += 1
+            if move_count == current_move_idx:
+                highlighted_text += f'<span style="background-color: yellow; font-weight: bold;">{white_move}</span>'
+            else:
+                highlighted_text += white_move
+            
+            # Add black move if it exists
+            if black_move:
+                highlighted_text += " "
+                move_count += 1
+                if move_count == current_move_idx:
+                    highlighted_text += f'<span style="background-color: yellow; font-weight: bold;">{black_move}</span>'
+                else:
+                    highlighted_text += black_move
+            
+            highlighted_text += " "
+        
+        return highlighted_text.strip()
 
     def select_analysis_line(self, index):
         """Select a specific analysis line"""
-        # Check if the index is valid
-        if 0 <= index < len(self.analysis_lines):
-            # Update the selected index
-            self.selected_line_index = index
-            
-            # Update the display
-            self.update_line_display()
-            
-            # Give focus to the selected widget
+        self.analysis_manager.select_line(index)
+        if self.analysis_line_widgets and index < len(self.analysis_line_widgets):
             self.analysis_line_widgets[index].setFocus()
 
     def get_final_labels_2d(self):
-        self.sync_squares_to_labels()
-        return self.labels_2d
+        """Get final board state as 2D labels (for compatibility)"""
+        self.sync_squares_to_model()
+        return self.board_model.get_display_labels()
     
     def get_side_to_move(self):
+        """Get side to move from UI"""
         return 'w' if self.white_rb.isChecked() else 'b'
+        
     def get_castling_rights(self) -> str:
+        """Get castling rights from UI checkboxes"""
         rights = ""
         if self.w_k_cb.isChecked(): rights += "K"
         if self.w_q_cb.isChecked(): rights += "Q"
         if self.b_k_cb.isChecked(): rights += "k"
         if self.b_q_cb.isChecked(): rights += "q"
-        return rights or "-"           # FEN uses "-" when no rights remain
+        return rights or "-"
     
     def refresh_castling_checkboxes(self):
-        """Enable box when K+R are on their start squares, else grey-out+untick."""
-        # get the board in *standard orientation* (rank‑8 first, file‑a first)
-        board = [row[:] for row in self.labels_2d]
-        if self.is_flipped:
-            # Un-flip the data to get it into standard orientation
-            board.reverse()
-            for r in board:
-                r.reverse()
+        """Enable castling boxes based on piece positions and update from model"""
+        # Check which castling rights are possible based on current position
+        WK = self.board_model.can_castle('w', True)   # White kingside
+        WQ = self.board_model.can_castle('w', False)  # White queenside
+        BK = self.board_model.can_castle('b', True)   # Black kingside
+        BQ = self.board_model.can_castle('b', False)  # Black queenside
 
-        # quick tests: is king + rook on their initial squares?
-        WK = board[7][4] == "wk" and board[7][7] == "wr"     # e1 + h1
-        WQ = board[7][4] == "wk" and board[7][0] == "wr"     # e1 + a1
-        BK = board[0][4] == "bk" and board[0][7] == "br"     # e8 + h8
-        BQ = board[0][4] == "bk" and board[0][0] == "br"     # e8 + a8
-
+        # Update checkboxes
         for cb, ok in ((self.w_k_cb, WK), (self.w_q_cb, WQ),
-                    (self.b_k_cb, BK), (self.b_q_cb, BQ)):
-            cb.blockSignals(True)        # avoid spurious clicked()
-            cb.setEnabled(ok)            # grey‑out if not possible
-            if not ok:                   # impossible → untick
+                      (self.b_k_cb, BK), (self.b_q_cb, BQ)):
+            cb.blockSignals(True)
+            cb.setEnabled(ok)
+            if not ok:
                 cb.setChecked(False)
-            else:                        # If enabled, automatically check it
-                cb.setChecked(True)      
+            else:
+                # Set from model's current state
+                current_rights = self.board_model.get_castling_rights()
+                if cb == self.w_k_cb:
+                    cb.setChecked('K' in current_rights)
+                elif cb == self.w_q_cb:
+                    cb.setChecked('Q' in current_rights)
+                elif cb == self.b_k_cb:
+                    cb.setChecked('k' in current_rights)
+                elif cb == self.b_q_cb:
+                    cb.setChecked('q' in current_rights)
             cb.blockSignals(False)
 
-    def compute_ep_candidates(self):
-        """
-        Identify squares where en passant captures might be possible.
-        """
-        self.ep_possible.clear()
-        side = self.get_side_to_move()  # 'w' or 'b'
-
-        # board in standard orientation (rank-8 first, file-a first)
-        std = [row[:] for row in self.labels_2d]
-        if self.is_flipped:
-            std.reverse()
-            for row in std:
-                row.reverse()
-
-        def alg(r, c): return "abcdefgh"[c] + str(8 - r)
-
-        # In chess, en passant is only possible on the 3rd rank (for white) or 6th rank (for black)
-        if side == 'w':  # White to move
-            # Check for possible en passant targets on the 6th rank (3rd rank from white's perspective)
-            # This is where a black pawn might have just moved two squares forward
-            enpassant_rank = 2  # Target rank in the array (6th rank)
-            pawn_rank = 3      # Where the black pawn would be
-            
-            for col in range(8):
-                # Check if there's a black pawn on the 5th rank
-                if std[pawn_rank][col] == "bp":
-                    # Check if there are white pawns on either side that could capture
-                    for dcol in [-1, 1]:
-                        if 0 <= col + dcol < 8 and std[pawn_rank][col + dcol] == "wp":
-                            # Found a potential en passant situation
-                            # The en passant target is on the 6th rank, same file as the black pawn
-                            trg_r, trg_c = enpassant_rank, col
-                            # Convert to display coordinates
-                            disp_r = 7 - trg_r if self.is_flipped else trg_r
-                            disp_c = 7 - trg_c if self.is_flipped else trg_c
-                            self.ep_possible[(disp_r, disp_c)] = alg(trg_r, trg_c)
-                            
-        else:  # Black to move
-            # Check for possible en passant targets on the 3rd rank (6th rank from black's perspective)
-            # This is where a white pawn might have just moved two squares forward
-            enpassant_rank = 5  # Target rank in the array (3rd rank)
-            pawn_rank = 4      # Where the white pawn would be
-            
-            for col in range(8):
-                # Check if there's a white pawn on the 4th rank
-                if std[pawn_rank][col] == "wp":
-                    # Check if there are black pawns on either side that could capture
-                    for dcol in [-1, 1]:
-                        if 0 <= col + dcol < 8 and std[pawn_rank][col + dcol] == "bp":
-                            # Found a potential en passant situation
-                            # The en passant target is on the 3rd rank, same file as the white pawn
-                            trg_r, trg_c = enpassant_rank, col
-                            # Convert to display coordinates
-                            disp_r = 7 - trg_r if self.is_flipped else trg_r
-                            disp_c = 7 - trg_c if self.is_flipped else trg_c
-                            self.ep_possible[(disp_r, disp_c)] = alg(trg_r, trg_c)
-
-        
-
     def refresh_en_passant(self):
-        """Re-evaluate EP candidates; disable if none or if in check."""
+        """Re-evaluate EP candidates and update UI"""
         # First clear any existing highlights
         if self.ep_highlight_on:
             for (r,c) in self.ep_possible:
                 self.squares[r][c].set_highlight(False)
             self.ep_highlight_on = False
             
-        self.compute_ep_candidates()
-        ok = bool(self.ep_possible)
-
-        std = [row[:] for row in self.labels_2d]
-        if self.is_flipped:
-            std.reverse()
-            for row in std:
-                row.reverse()
-
-        # force ep field = '-' and check for check()
-        fen = labels_to_fen(
-            std,
-            self.get_side_to_move(),
-            self.get_castling_rights(),
-            "-"   # ignore any selected ep square
-        )
-        board = chess.Board(fen)
-        if board.is_check():
-            ok = False
+        # Get en passant targets from the model
+        self.ep_possible = self.board_model.get_en_passant_targets()
+        ok = self.board_model.has_en_passant_candidates()
 
         self.ep_cb.blockSignals(True)
         self.ep_cb.setEnabled(ok)
@@ -1154,6 +919,7 @@ class BoardEditor(QDialog):
         self.ep_cb.blockSignals(False)
 
     def get_ep_field(self):
+        """Get the en passant field for FEN string"""
         return self.ep_selected if (self.ep_cb.isChecked() and self.ep_selected) else "-"
 
     def show_help(self):
@@ -1200,16 +966,7 @@ class BoardEditor(QDialog):
                 QApplication.restoreOverrideCursor()
             self.remembered_piece = None
     
-    def place_remembered_piece(self, row, col):
-        """Place the remembered piece on the board at the specified position"""
-        if self.remembered_piece and 0 <= row < 8 and 0 <= col < 8:
-            # Update the square with the remembered piece
-            self.squares[row][col].piece_label = self.remembered_piece
-            self.squares[row][col].update()
-            self.sync_squares_to_labels()
-            self.save_state()  # Save state after placing a piece
-            return True
-        return False
+
         
     def clear_remembered_piece(self):
         """Clear the currently remembered piece"""
@@ -1238,235 +995,426 @@ class BoardEditor(QDialog):
     def eventFilter(self, obj, event):
         """Handle key events for analysis line navigation"""
         if obj in self.analysis_line_widgets and event.type() == QEvent.KeyPress:
-            if self.selected_line_index >= 0 and self.selected_line_index < len(self.analysis_lines):
-                # Get the selected line and moves for navigation
-                line_idx = self.selected_line_index
-                move_idx = self.current_move_indices[line_idx]
-                
-                # Handle arrow keys
-                if event.key() == Qt.Key_Right:
-                    # Move to next move in the variation - include all moves in the line
-                    line_positions = self.analysis_positions[line_idx]
-                    total_positions = len(line_positions) if line_positions else 0
-                    
-                    if total_positions > 0 and move_idx < total_positions - 1:
-                        self.current_move_indices[line_idx] += 1
-                        self.has_navigated[line_idx] = True
-                        self.update_line_display()
-                    return True
-                elif event.key() == Qt.Key_Left:
-                    # Move to previous move in the variation
-                    if self.current_move_indices[line_idx] > 0:
-                        self.current_move_indices[line_idx] -= 1
-                        self.has_navigated[line_idx] = True  # Mark that user has navigated this line
-                        self.update_line_display()
-                    return True
-                elif event.key() == Qt.Key_Up:
-                    # Select previous line
-                    if self.selected_line_index > 0:
-                        self.selected_line_index -= 1
-                        self.update_line_display()
-                    return True
-                elif event.key() == Qt.Key_Down:
-                    # Select next line
-                    if self.selected_line_index < len(self.analysis_lines) - 1:
-                        self.selected_line_index += 1
-                        self.update_line_display()
-                    return True
-                elif event.key() == Qt.Key_Home:
-                    # Go to start position
-                    self.current_move_indices[line_idx] = 0
-                    self.has_navigated[line_idx] = True  # Mark that user has navigated this line
-                    self.update_line_display()
-                    return True
-                elif event.key() == Qt.Key_End:
-                    # Go to end position - ensure we can reach the very last position
-                    line_positions = self.analysis_positions[line_idx]
-                    if line_positions and len(line_positions) > 0:
-                        self.current_move_indices[line_idx] = len(line_positions) - 1
-                        self.has_navigated[line_idx] = True
-                        self.update_line_display()
-                    return True
+            # Handle arrow keys for analysis navigation
+            if event.key() == Qt.Key_Right:
+                self.analysis_manager.navigate_line('next')
+                return True
+            elif event.key() == Qt.Key_Left:
+                self.analysis_manager.navigate_line('previous')
+                return True
+            elif event.key() == Qt.Key_Up:
+                self.analysis_manager.navigate_line('line_up')
+                return True
+            elif event.key() == Qt.Key_Down:
+                self.analysis_manager.navigate_line('line_down')
+                return True
+            elif event.key() == Qt.Key_Home:
+                self.analysis_manager.navigate_line('start')
+                return True
+            elif event.key() == Qt.Key_End:
+                self.analysis_manager.navigate_line('end')
+                return True
         return super().eventFilter(obj, event)
-        
-    def update_line_display(self):
-        """Update the display of the analysis lines with highlighting of the current move"""
-        if not self.analysis_lines:
-            return
-            
-        # Hide the placeholder label if we have lines
-        self.placeholder_label.hide()
-        
-        # First update the board position based on the selected line and move
-        if self.selected_line_index >= 0 and self.selected_line_index < len(self.analysis_positions):
-            line_idx = self.selected_line_index
-            move_idx = self.current_move_indices[line_idx]
-            
-            # Check if there are positions for this line
-            if self.analysis_positions[line_idx] and move_idx < len(self.analysis_positions[line_idx]):
-                # Get the position for the current move
-                position_board = self.analysis_positions[line_idx][move_idx]
-                
-                # Convert the FEN to our internal format
-                self.update_board_from_fen(position_board.fen())
-        
-        # Now update the move highlighting in the text
-        for i, full_line in enumerate(self.analysis_lines):
-            # Split into the score part and the moves part
-            parts = full_line.split('|')
-            if len(parts) == 2:
-                score_part = parts[0].strip()
-                moves_part = parts[1].strip()
-                
-                # Better parsing of chess moves
-                moves = []
-                # Parse move numbers (like "1.", "2.", etc.) and actual moves
-                # This regex finds either move numbers (e.g., "1.") or actual moves (e.g., "e4", "Nf6", "O-O")
-                pattern = r'(\d+\.\.\.|\d+\.)|([KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](=[QRBN])?[+#]?|O-O-O|O-O)'
-                tokens = re.findall(pattern, moves_part)
-                # Extract just the moves (not the move numbers)
-                for token in tokens:
-                    if token[1]:  # This is a move, not a move number
-                        moves.append(token[1])
-                # Determine current move for highlighting
-                current_idx = self.current_move_indices[i]
-                current_idx = min(current_idx, len(moves)) if moves else 0
-                current_idx = max(0, current_idx)
-                self.current_move_indices[i] = current_idx
-                
-                # Build highlighted text
-                html_text = score_part + " | "
-                
-                # Re-analyze the original string to preserve formatting
-                last_end = 0
-                current_move_index = 0
-                
-                for match in re.finditer(pattern, moves_part):
-                    # Add text before this match
-                    html_text += moves_part[last_end:match.start()]
-                    
-                    # Add the match itself, with highlighting if it's a move (not a move number)
-                    # and it's the current move AND this is the selected line AND user has navigated
-                    text = match.group()
-                    if match.group(2):  # This is a move
-                        # When navigating, highlight the previous move to match what's on the board
-                        if self.has_navigated[i] and i == self.selected_line_index:
-                            if (current_move_index == current_idx - 1) or (current_idx == 0 and current_move_index == 0):
-                                html_text += f"<span style='background-color: yellow;'>{text}</span>"
-                            else:
-                                html_text += text
-                        else:
-                            html_text += text
-                        current_move_index += 1
-                    else:  # This is a move number
-                        html_text += text
-                    
-                    last_end = match.end()
-                
-                # Add any remaining text
-                html_text += moves_part[last_end:]
-                
-                # Update line widget
-                self.analysis_line_widgets[i].setText(html_text)
-                
-                # Show line widget
-                self.analysis_line_widgets[i].show()
-                
-                # Apply selection highlight - only highlight the selected line
-                if i == self.selected_line_index:
-                    self.analysis_line_widgets[i].setStyleSheet("padding: 5px; border: 2px solid blue; background-color: #e6f2ff;")
-                else:
-                    self.analysis_line_widgets[i].setStyleSheet("padding: 5px; border: 1px solid transparent;")
-            else:
-                # Just show the line as is if we can't parse it
-                self.analysis_line_widgets[i].setText(full_line)
-                self.analysis_line_widgets[i].show()
-                
-                # Apply selection highlight
-                if i == self.selected_line_index:
-                    self.analysis_line_widgets[i].setStyleSheet("padding: 5px; border: 2px solid blue; background-color: #e6f2ff;")
-                else:
-                    self.analysis_line_widgets[i].setStyleSheet("padding: 5px; border: 1px solid transparent;")
-
-    def update_board_from_fen(self, fen):
-        """Updates the board display from a FEN string while preserving orientation"""
-        try:
-            # Parse the FEN string
-            parts = fen.split(' ')
-            piece_placement = parts[0]
-            side_to_move = parts[1] if len(parts) > 1 else 'w'
-            
-            # Create a standard board representation from the FEN
-            ranks = piece_placement.split('/')
-            board_from_fen = []
-            
-            for rank in ranks:
-                row = []
-                for char in rank:
-                    if char.isdigit():
-                        # Add empty squares
-                        row.extend(["empty"] * int(char))
-                    else:
-                        # Convert piece character to our label format
-                        piece_color = 'w' if char.isupper() else 'b'
-                        piece_type = char.lower()
-                        if piece_type == 'p':
-                            row.append(f"{piece_color}p")
-                        elif piece_type == 'n':
-                            row.append(f"{piece_color}n")
-                        elif piece_type == 'b':
-                            row.append(f"{piece_color}b")
-                        elif piece_type == 'r':
-                            row.append(f"{piece_color}r")
-                        elif piece_type == 'q':
-                            row.append(f"{piece_color}q")
-                        elif piece_type == 'k':
-                            row.append(f"{piece_color}k")
-                        else:
-                            row.append("empty")  # Fallback
-                board_from_fen.append(row)
-            
-            # Now transform the board according to our current display orientation
-            display_board = copy.deepcopy(board_from_fen)
-            
-            # If the main board is showing flipped pieces, the analysis board must also show flipped pieces
-            if self.is_flipped:
-                display_board.reverse()
-                for row in display_board:
-                    row.reverse()
-                    
-            # Update the board display
-            self.labels_2d = display_board
-            for r in range(8):
-                for c in range(8):
-                    self.squares[r][c].piece_label = self.labels_2d[r][c]
-                    self.squares[r][c].update()
-            
-            # Update side to move
-            self.white_rb.setChecked(side_to_move == 'w')
-            self.black_rb.setChecked(side_to_move == 'b')
-            
-            # No need to refresh castling rights as we're just visualizing
-            # But do refresh en passant possibilities
-            self.refresh_en_passant()
-            
-        except Exception as e:
-            print(f"Error updating board from FEN: {e}")
-
     def restore_original_position(self):
         """Restore the original position from before analysis"""
-        if self.original_labels_2d:
-            self.labels_2d = copy.deepcopy(self.original_labels_2d)
-            for r in range(8):
-                for c in range(8):
-                    self.squares[r][c].piece_label = self.labels_2d[r][c]
-                    self.squares[r][c].update()
+        success = self.analysis_manager.restore_original_position()
+        if not success:
+            QMessageBox.information(self, "No Original Position", "No original position to restore.")
+    
+    def on_state_toggle(self):
+        """Handle state toggle button click"""
+        if self.state_controller.is_edit_mode:
+            # Transitioning to Play mode - sync ALL UI state before validation
+            self.sync_squares_to_model()
             
-            # Restore side to move
-            if self.original_side_to_move:
-                self.white_rb.setChecked(self.original_side_to_move == 'w')
-                self.black_rb.setChecked(self.original_side_to_move == 'b')
+            # Update board model with current UI state (like in on_copy_fen)
+            self.board_model.set_side_to_move(self.get_side_to_move())
+            castling_rights = self.get_castling_rights()
+            self.board_model.set_castling_rights(castling_rights)
+            if hasattr(self, 'ep_selected') and self.ep_selected:
+                self.board_model.set_en_passant_square(self.ep_selected)
+            else:
+                self.board_model.set_en_passant_square(None)
             
-            # Refresh UI elements
-            self.refresh_castling_checkboxes()
-            self.refresh_en_passant()
+            # Now validate the complete position
+            is_valid, error_msg = self.board_model.validate_position()
+            if not is_valid:
+                QMessageBox.warning(self, "Invalid Position", 
+                                  f"Cannot switch to Play mode:\n\n{error_msg}")
+                return
+            
+            # Transition to Play state
+            self.state_controller.transition_to_play()
+            
+            # Initialize PGN manager with current position
+            self.pgn_manager.start_new_game(self.board_model.get_fen())
+            
+        else:
+            # Transitioning to Edit mode
+            self.state_controller.transition_to_edit()
+    
+    def on_state_changed(self, new_state: BoardState):
+        """Handle state change callback"""
+        # Clear any play mode selection state
+        if hasattr(self, 'selected_square'):
+            # Clear highlights
+            if hasattr(self, 'highlighted_squares'):
+                for sq_coords in self.highlighted_squares:
+                    self.squares[sq_coords[0]][sq_coords[1]].set_highlight(False)
+                self.highlighted_squares.clear()
+            
+            self.selected_square = None
+            self.legal_moves = []
+        
+        # Clear any play mode drag highlights
+        self.clear_play_mode_drag_highlights()
+        
+        if new_state == BoardState.EDIT:
+            self.apply_edit_state_ui()
+        else:
+            self.apply_play_state_ui()
+    
+    def apply_edit_state_ui(self):
+        """Apply UI changes for Edit state - show editing controls, hide play controls"""
+        # Update button text
+        self.state_toggle_btn.setText("Finish Edit")
+        
+        # Show editing controls
+        self.clear_btn.show()
+        self.switch_btn.show()
+        self.reset_btn.show()
+        self.redo_btn.show()
+        self.redo_btn.setEnabled(self.history_manager.can_redo())
+        self.undo_btn.show()
+        self.undo_btn.setEnabled(self.history_manager.can_undo())
+        
+        # Show editing controls
+        self.flip_btn.show()
+        self.paste_btn.show()
+        
+        # Hide Copy FEN (only available in Play mode)
+        self.copy_btn.hide()
+        
+        # Set Edit mode button text
+        self.undo_btn.setText("Undo")
+        self.undo_btn.setToolTip("Undo last board edit")
+        
+        # Hide Play mode undo button
+        self.play_undo_btn.hide()
+        
+        # Show castling and en passant controls
+        self.white_rb.show()
+        self.black_rb.show()
+        self.w_k_cb.show()
+        self.w_q_cb.show()
+        self.b_k_cb.show()
+        self.b_q_cb.show()
+        self.ep_cb.show()
+        self.refresh_castling_checkboxes()
+        self.refresh_en_passant()
+        
+        # Hide Learn and Analysis
+        self.learn_btn.hide()
+        # Hide the analysis container (which contains analysis button and dropdown)
+        analysis_container = self.analysis_btn.parent()
+        if analysis_container:
+            analysis_container.hide()
+        self.reset_analysis_btn.hide()
+        
+        # Hide Copy PGN button (will be shown in Play mode)
+        self.copy_pgn_btn.hide()
+        
+        # Show palette
+        bottom_container = self.palette_squares[0].parent()
+        if bottom_container:
+            bottom_container.show()
+        
+        # Hide move list
+        self.move_list_container.hide()
+        
+        # Enable piece dragging on board
+        for row in self.squares:
+            for square in row:
+                square.setAcceptDrops(True)
+    
+    def apply_play_state_ui(self):
+        """Apply UI changes for Play state - hide editing controls, show play controls"""
+        # Update button text
+        self.state_toggle_btn.setText("Edit Board")
+        
+        # Hide most editing controls
+        self.clear_btn.hide()
+        self.switch_btn.hide()
+        self.reset_btn.hide()
+        self.redo_btn.hide()
+        
+        # These controls remain visible in Play mode
+        self.flip_btn.show()
+        self.copy_btn.show()
+        self.paste_btn.hide()  # Hide Paste FEN in Play mode
+        self.copy_pgn_btn.show()  # Show Copy PGN in main button bar
+        
+        # Hide main undo button from button bar, use the one in move list
+        self.undo_btn.hide()
+        
+        # Show and enable Play mode undo button in move list
+        self.play_undo_btn.show()
+        self.play_undo_btn.setEnabled(self.pgn_manager.has_moves())
+        
+        # Hide castling and en passant controls
+        self.white_rb.hide()
+        self.black_rb.hide()
+        self.w_k_cb.hide()
+        self.w_q_cb.hide()
+        self.b_k_cb.hide()
+        self.b_q_cb.hide()
+        self.ep_cb.hide()
+        
+        # Show Learn and Analysis
+        self.learn_btn.show()
+        # Show the analysis container (which contains analysis button and dropdown)
+        analysis_container = self.analysis_btn.parent()
+        if analysis_container:
+            analysis_container.show()
+        self.reset_analysis_btn.show()
+        
+        # Hide palette
+        bottom_container = self.palette_squares[0].parent()
+        if bottom_container:
+            bottom_container.hide()
+        
+        # Show move list
+        self.move_list_container.show()
+        self.update_move_list_display()
+        
+        # Enable piece dragging for Play mode (legal moves only)
+        for row in self.squares:
+            for square in row:
+                square.setAcceptDrops(True)
+        
+        # Initialize play mode drag state
+        if not hasattr(self, 'play_mode_drag_legal_moves'):
+            self.play_mode_drag_legal_moves = []
+            self.play_mode_drag_highlighted_squares = []
+    
+    def update_move_list_display(self):
+        """Update the move list text display"""
+        move_text = self.pgn_manager.get_move_list_text()
+        self.move_list_text.setText(move_text)
+        
+        # Scroll to bottom to show latest moves
+        scrollbar = self.move_list_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+    
+    def on_copy_pgn(self):
+        """Copy PGN to clipboard"""
+        pgn_text = self.pgn_manager.get_pgn_text()
+        if pgn_text:
+            QApplication.clipboard().setText(pgn_text)
+            QMessageBox.information(self, "PGN Copied", "PGN text copied to clipboard")
+        else:
+            QMessageBox.information(self, "No Moves", "No moves to copy")
+    
+    def handle_play_mode_click(self, row: int, col: int):
+        """
+        Handle square clicks in Play mode for legal moves.
+        
+        Args:
+            row: Display row clicked
+            col: Display column clicked
+        """
+        if not hasattr(self, 'selected_square'):
+            self.selected_square = None
+            self.legal_moves = []
+            self.highlighted_squares = []
+        
+        # Clear any existing drag highlights
+        self.clear_play_mode_drag_highlights()
+        
+        # Convert display coords to algebraic notation
+        if self.board_model.is_display_flipped:
+            file_idx = 7 - col
+            rank_idx = row
+        else:
+            file_idx = col
+            rank_idx = 7 - row
+        
+        clicked_square = chess.square(file_idx, rank_idx)
+        internal_board = self.board_model.get_internal_board()
+        
+        # If no piece selected
+        if self.selected_square is None:
+            piece = internal_board.piece_at(clicked_square)
+            if piece and piece.color == internal_board.turn:
+                # Select this piece
+                self.selected_square = clicked_square
+                
+                # Clear previous highlights
+                for sq_coords in self.highlighted_squares:
+                    self.squares[sq_coords[0]][sq_coords[1]].set_highlight(False)
+                self.highlighted_squares.clear()
+                
+                # Find and highlight legal moves
+                self.legal_moves = [move for move in internal_board.legal_moves 
+                                  if move.from_square == clicked_square]
+                
+                for move in self.legal_moves:
+                    # Convert to display coords
+                    to_file = chess.square_file(move.to_square)
+                    to_rank = chess.square_rank(move.to_square)
+                    
+                    if self.board_model.is_display_flipped:
+                        disp_row = to_rank
+                        disp_col = 7 - to_file
+                    else:
+                        disp_row = 7 - to_rank
+                        disp_col = to_file
+                    
+                    self.squares[disp_row][disp_col].set_highlight(True)
+                    self.highlighted_squares.append((disp_row, disp_col))
+        
+        else:
+            # Clear highlights
+            for sq_coords in self.highlighted_squares:
+                self.squares[sq_coords[0]][sq_coords[1]].set_highlight(False)
+            self.highlighted_squares.clear()
+            
+            # Check if this is a legal move
+            move = None
+            for legal_move in self.legal_moves:
+                if legal_move.to_square == clicked_square:
+                    # Check for promotion
+                    if (internal_board.piece_at(self.selected_square).piece_type == chess.PAWN and
+                        chess.square_rank(clicked_square) in [0, 7]):
+                        # For simplicity, auto-promote to queen
+                        if legal_move.promotion == chess.QUEEN:
+                            move = legal_move
+                            break
+                    else:
+                        move = legal_move
+                        break
+            
+            if move:
+                # Make the move
+                san = internal_board.san(move)
+                internal_board.push(move)
+                
+                # Record in PGN manager
+                self.pgn_manager.add_move(move, san)
+                
+                # Update display
+                self.sync_model_to_squares()
+                self.refresh_ui_from_model()
+                
+                # Update undo button (use play mode button if in play state)
+                if self.state_controller.is_play_mode:
+                    self.play_undo_btn.setEnabled(True)
+                else:
+                    self.undo_btn.setEnabled(True)
+            
+            # Clear selection
+            self.selected_square = None
+            self.legal_moves = []
+
+    def start_play_mode_drag(self, from_row: int, from_col: int) -> bool:
+        """
+        Start a drag operation in Play mode by highlighting legal moves.
+        
+        Args:
+            from_row: Display row of source square
+            from_col: Display column of source square
+            
+        Returns:
+            True if drag can start (piece can move), False otherwise
+        """
+        # Convert display coords to chess square
+        if self.board_model.is_display_flipped:
+            file_idx = 7 - from_col
+            rank_idx = from_row
+        else:
+            file_idx = from_col
+            rank_idx = 7 - from_row
+        
+        from_square = chess.square(file_idx, rank_idx)
+        internal_board = self.board_model.get_internal_board()
+        
+        # Check if there's a piece of the current player at this square
+        piece = internal_board.piece_at(from_square)
+        if not piece or piece.color != internal_board.turn:
+            return False
+        
+        # Clear any existing highlights
+        self.clear_play_mode_drag_highlights()
+        
+        # Find legal moves from this square
+        self.play_mode_drag_legal_moves = [move for move in internal_board.legal_moves 
+                                         if move.from_square == from_square]
+        
+        if not self.play_mode_drag_legal_moves:
+            return False
+        
+        # Highlight legal destination squares in green
+        for move in self.play_mode_drag_legal_moves:
+            # Convert to display coords
+            to_file = chess.square_file(move.to_square)
+            to_rank = chess.square_rank(move.to_square)
+            
+            if self.board_model.is_display_flipped:
+                disp_row = to_rank
+                disp_col = 7 - to_file
+            else:
+                disp_row = 7 - to_rank
+                disp_col = to_file
+            
+            self.squares[disp_row][disp_col].set_highlight(True)
+            self.play_mode_drag_highlighted_squares.append((disp_row, disp_col))
+        
+        return True
+    
+    def clear_play_mode_drag_highlights(self):
+        """Clear all play mode drag highlights"""
+        if hasattr(self, 'play_mode_drag_highlighted_squares'):
+            for sq_coords in self.play_mode_drag_highlighted_squares:
+                self.squares[sq_coords[0]][sq_coords[1]].set_highlight(False)
+            self.play_mode_drag_highlighted_squares.clear()
+        
+        if hasattr(self, 'play_mode_drag_legal_moves'):
+            self.play_mode_drag_legal_moves.clear()
+    
+    def is_play_mode_move_legal(self, from_row: int, from_col: int, to_row: int, to_col: int):
+        """
+        Check if a move is legal in Play mode and return the move object.
+        
+        Args:
+            from_row, from_col: Display coordinates of source square
+            to_row, to_col: Display coordinates of destination square
+            
+        Returns:
+            chess.Move object if legal, None otherwise
+        """
+        if not hasattr(self, 'play_mode_drag_legal_moves'):
+            return None
+        
+        # Convert destination display coords to chess square
+        if self.board_model.is_display_flipped:
+            to_file = 7 - to_col
+            to_rank = to_row
+        else:
+            to_file = to_col
+            to_rank = 7 - to_row
+        
+        to_square = chess.square(to_file, to_rank)
+        
+        # Find matching legal move
+        for move in self.play_mode_drag_legal_moves:
+            if move.to_square == to_square:
+                # For pawn promotion, auto-promote to queen
+                internal_board = self.board_model.get_internal_board()
+                if (internal_board.piece_at(move.from_square).piece_type == chess.PAWN and
+                    chess.square_rank(to_square) in [0, 7]):
+                    if move.promotion == chess.QUEEN:
+                        return move
+                else:
+                    return move
+        
+        return None

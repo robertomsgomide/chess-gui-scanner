@@ -129,41 +129,71 @@ class BoardSquareWidget(QWidget):
             self.board_editor.clear_remembered_piece()
             # Don't return here - let right-click continue to erase pieces if on board
             
-        # Handle right-click for erasing a piece
-        if event.button() == Qt.RightButton and self.row >= 0:
+        # Handle right-click for erasing a piece (Edit mode only)
+        if (event.button() == Qt.RightButton and self.row >= 0 and
+            self.board_editor and 
+            hasattr(self.board_editor, 'state_controller') and 
+            self.board_editor.state_controller.is_edit_mode):
             if self.piece_label != "empty":
                 self.piece_label = "empty"
                 self.update()
                 if self.board_editor:               # keep FEN in sync, etc.
-                    self.board_editor.sync_squares_to_labels()
+                    self.board_editor.sync_squares_to_model()
                     # Save state after erasing a piece
                     if hasattr(self.board_editor, 'save_state'):
                         self.board_editor.save_state()
             return  # stop; no drag on right click
             
-        # If left-clicking on a board square and we have a remembered piece, place it
+        # If left-clicking on a board square and we have a remembered piece (Edit mode only)
         if (event.button() == Qt.LeftButton and 
             self.row >= 0 and 
             hasattr(self.board_editor, 'remembered_piece') and 
-            self.board_editor.remembered_piece):
+            self.board_editor.remembered_piece and
+            self.board_editor and 
+            hasattr(self.board_editor, 'state_controller') and 
+            self.board_editor.state_controller.is_edit_mode):
             # Place the remembered piece
             self.piece_label = self.board_editor.remembered_piece
             self.update()
             if self.board_editor:
-                self.board_editor.sync_squares_to_labels()
+                self.board_editor.sync_squares_to_model()
                 # Save state after placing a remembered piece
                 if hasattr(self.board_editor, 'save_state'):
                     self.board_editor.save_state()
             return
 
-        # Otherwise do normal drag behavior
+        # Check if we're in play mode and this is a left-click on a board square
+        if (self.board_editor and 
+            hasattr(self.board_editor, 'state_controller') and 
+            self.board_editor.state_controller.is_play_mode and
+            event.button() == Qt.LeftButton and 
+            self.row >= 0):
+            
+            # For empty squares, handle as click-to-move
+            if self.piece_label == "empty":
+                self.board_editor.handle_play_mode_click(self.row, self.col)
+                return
+            
+            # For pieces, check if we can start a drag operation
+            can_drag = self.board_editor.start_play_mode_drag(self.row, self.col)
+            if not can_drag:
+                # If we can't drag, treat as a click (might be wrong player's piece)
+                self.board_editor.handle_play_mode_click(self.row, self.col)
+                return
+            
+            # Continue with drag operation below
+        
+        # Otherwise do normal drag behavior for Edit mode or valid Play mode drags
         if event.button() == Qt.LeftButton and (self.row < 0 or self.piece_label != "empty"):
             piece_being_dragged = self.piece_label
+            
+            # In Play mode, we've already validated the piece can move
+            # In Edit mode, allow any piece to be dragged
             if self.row >= 0:
                 self.piece_label = "empty"
                 self.update()
                 if self.board_editor:
-                    self.board_editor.sync_squares_to_labels()
+                    self.board_editor.sync_squares_to_model()
 
             drag = QDrag(self)
             mime = QMimeData()
@@ -187,7 +217,13 @@ class BoardSquareWidget(QWidget):
                 self.piece_label = piece_being_dragged
                 self.update()
                 if self.board_editor:
-                    self.board_editor.sync_squares_to_labels()
+                    self.board_editor.sync_squares_to_model()
+            
+            # Clear play mode highlights after drag operation
+            if (self.board_editor and 
+                hasattr(self.board_editor, 'state_controller') and 
+                self.board_editor.state_controller.is_play_mode):
+                self.board_editor.clear_play_mode_drag_highlights()
 
     def mouseDoubleClickEvent(self, event):
         """Handle double-click to remember a piece"""
@@ -224,6 +260,41 @@ class BoardSquareWidget(QWidget):
         src_r, src_c, lbl = data.split(',')
         src_r, src_c = int(src_r), int(src_c)
 
+        # Check if we're in Play mode and need to validate the move
+        if (self.board_editor and 
+            hasattr(self.board_editor, 'state_controller') and 
+            self.board_editor.state_controller.is_play_mode and
+            src_r >= 0):  # Only validate board-to-board moves, not palette drops
+            
+            # Check if this move is legal
+            move = self.board_editor.is_play_mode_move_legal(src_r, src_c, self.row, self.col)
+            if not move:
+                # Illegal move - reject the drop
+                event.ignore()
+                return
+            
+            # Legal move - execute it
+            internal_board = self.board_editor.board_model.get_internal_board()
+            san = internal_board.san(move)
+            internal_board.push(move)
+            
+            # Record in PGN manager
+            self.board_editor.pgn_manager.add_move(move, san)
+            
+            # Update the board display from the model
+            self.board_editor.sync_model_to_squares()
+            self.board_editor.refresh_ui_from_model()
+            
+            # Update undo button
+            self.board_editor.play_undo_btn.setEnabled(True)
+            
+            # Clear play mode highlights
+            self.board_editor.clear_play_mode_drag_highlights()
+            
+            event.acceptProposedAction()
+            return
+
+        # Edit mode or palette drops - use original behavior
         # clear origin square if it was on the board
         if src_r >= 0:
             origin_sq = self.board_editor.squares[src_r][src_c]
@@ -235,10 +306,13 @@ class BoardSquareWidget(QWidget):
         self.update()
 
         # keep BoardEditor's 2‑D state in sync for FEN, flips, etc.
-        self.board_editor.sync_squares_to_labels()
+        self.board_editor.sync_squares_to_model()
         
-        # Save state after dragging and dropping a piece
-        if hasattr(self.board_editor, 'save_state'):
+        # Save state after dragging and dropping a piece (Edit mode only)
+        if (hasattr(self.board_editor, 'save_state') and
+            self.board_editor and 
+            hasattr(self.board_editor, 'state_controller') and 
+            self.board_editor.state_controller.is_edit_mode):
             self.board_editor.save_state()
 
         event.acceptProposedAction()

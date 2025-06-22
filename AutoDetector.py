@@ -1,10 +1,11 @@
-# AutoDetector.py
-
 import cv2
 import numpy as np
 from typing import Optional, Tuple
 from PIL import Image
 
+#########################################
+# AutoDetector.py
+#########################################
 class AutoDetector:
     """
     Automatically locate an 8×8 chessboard inside a screenshot using a cascade
