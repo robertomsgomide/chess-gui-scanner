@@ -39,6 +39,7 @@ class EditorStateManager:
         
         # Update button text
         ui.state_toggle_btn.setText("Finish Edit")
+        ui.state_toggle_btn.setIcon(ui.icons['done'])
         
         # Show editing controls
         ui.clear_btn.show()
@@ -102,6 +103,7 @@ class EditorStateManager:
         
         # Update button text
         ui.state_toggle_btn.setText("Edit Board")
+        ui.state_toggle_btn.setIcon(ui.icons['empty'])
         
         # Hide most editing controls
         ui.clear_btn.hide()

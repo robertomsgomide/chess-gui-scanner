@@ -1,6 +1,5 @@
 import os
 import sys
-import chess
 from BoardSquareWidget import BoardSquareWidget
 from BoardUIManager import BoardUIManager
 from EditorStateManager import EditorStateManager
@@ -14,10 +13,8 @@ from PgnManager import PgnManager
 from PyQt5.QtCore import Qt, QEvent, QSettings
 from PyQt5.QtGui import QIcon, QCursor
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QPushButton, QLabel,
-    QVBoxLayout, QDialog, QGridLayout, QMessageBox, QHBoxLayout,
-    QCheckBox, QRadioButton, QButtonGroup, QWhatsThis, QAction, QMenu, 
-    QFileDialog, QSizePolicy, QTextEdit, QScrollArea
+    QApplication, QDialog, QMessageBox, QWhatsThis, QAction, QMenu, 
+    QFileDialog
 )
 
 
@@ -32,7 +29,7 @@ class BoardEditor(QDialog):
     """
     def __init__(self, labels_2d, predicted_side_to_move='w'):
         super().__init__()
-        self.setWindowTitle("Board Editor")
+        self.setWindowTitle("Chess Viewer")
         self.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.CustomizeWindowHint |
                             Qt.WindowCloseButtonHint | Qt.WindowContextHelpButtonHint)
         

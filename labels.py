@@ -1,6 +1,6 @@
 import os
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPixmap, QPainter, QColor
+from PyQt5.QtGui import QPixmap
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

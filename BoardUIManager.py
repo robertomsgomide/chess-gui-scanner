@@ -27,22 +27,25 @@ class BoardUIManager:
         self.parent = parent_dialog
         self.settings = QSettings("ChessAIScanner", "Settings")
         
-        # Icon paths
+        # Icons as QIcon objects
         base_icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
         self.icons = {
-            'window': os.path.join(base_icon, "Chess_icon.png"),
-            'white': os.path.join(base_icon, "Chess_klt.png"),
-            'black': os.path.join(base_icon, "Chess_kdt.png"),
-            'switch': os.path.join(base_icon, "Chess_switch.png"),
-            'flip': os.path.join(base_icon, "Chess_flip.png"),
-            'clip': os.path.join(base_icon, "Chess_clip.png"),
-            'nn': os.path.join(base_icon, "Chess_nn.png"),
-            'paste': os.path.join(base_icon, "Chess_paste.png"),
-            'bcastle': os.path.join(base_icon, "Chess_bcastle.png"),
-            'wcastle': os.path.join(base_icon, "Chess_wcastle.png"),
-            'engine': os.path.join(base_icon, "Chess_engine.png"),
-            'undo': os.path.join(base_icon, "Chess_undo.png"),
-            'redo': os.path.join(base_icon, "Chess_redo.png")
+            'window': QIcon(os.path.join(base_icon, "Chess_icon.png")),
+            'white': QIcon(os.path.join(base_icon, "Chess_klt.png")),
+            'black': QIcon(os.path.join(base_icon, "Chess_kdt.png")),
+            'switch': QIcon(os.path.join(base_icon, "Chess_switch.png")),
+            'flip': QIcon(os.path.join(base_icon, "Chess_flip.png")),
+            'clip': QIcon(os.path.join(base_icon, "Chess_clip.png")),
+            'nn': QIcon(os.path.join(base_icon, "Chess_nn.png")),
+            'paste': QIcon(os.path.join(base_icon, "Chess_paste.png")),
+            'bcastle': QIcon(os.path.join(base_icon, "Chess_bcastle.png")),
+            'wcastle': QIcon(os.path.join(base_icon, "Chess_wcastle.png")),
+            'engine': QIcon(os.path.join(base_icon, "Chess_engine.png")),
+            'undo': QIcon(os.path.join(base_icon, "Chess_undo.png")),
+            'redo': QIcon(os.path.join(base_icon, "Chess_redo.png")),
+            'opening': QIcon(os.path.join(base_icon, "Chess_opening.png")),
+            'done': QIcon(os.path.join(base_icon, "Chess_done.png")),
+            'empty': QIcon()  # Empty icon for clearing button icons
         }
         
         # Coordinate labels
@@ -77,9 +80,9 @@ class BoardUIManager:
         
         # Side to move radio buttons
         self.white_rb = QRadioButton()
-        self.white_rb.setIcon(QIcon(self.icons['white']))
+        self.white_rb.setIcon(self.icons['white'])
         self.black_rb = QRadioButton()
-        self.black_rb.setIcon(QIcon(self.icons['black']))
+        self.black_rb.setIcon(self.icons['black'])
         self.white_rb.setChecked(predicted_side_to_move == 'w')
         self.black_rb.setChecked(predicted_side_to_move == 'b')
         
@@ -94,13 +97,13 @@ class BoardUIManager:
         
         # Castling checkboxes
         self.w_k_cb = QCheckBox("\nO-O")
-        self.w_k_cb.setIcon(QIcon(self.icons['wcastle']))
+        self.w_k_cb.setIcon(self.icons['wcastle'])
         self.w_q_cb = QCheckBox("\nO-O-O")
-        self.w_q_cb.setIcon(QIcon(self.icons['wcastle']))
+        self.w_q_cb.setIcon(self.icons['wcastle'])
         self.b_k_cb = QCheckBox("\nO-O")
-        self.b_k_cb.setIcon(QIcon(self.icons['bcastle']))
+        self.b_k_cb.setIcon(self.icons['bcastle'])
         self.b_q_cb = QCheckBox("\nO-O-O")
-        self.b_q_cb.setIcon(QIcon(self.icons['bcastle']))
+        self.b_q_cb.setIcon(self.icons['bcastle'])
         
         for cb in (self.w_k_cb, self.w_q_cb, self.b_k_cb, self.b_q_cb):
             cb.setChecked(True)
@@ -175,8 +178,8 @@ class BoardUIManager:
         self.redo_btn = QPushButton("Redo")
         self.undo_btn.setMinimumWidth(60)
         self.redo_btn.setMinimumWidth(60)
-        self.undo_btn.setIcon(QIcon(self.icons['undo']))
-        self.redo_btn.setIcon(QIcon(self.icons['redo']))
+        self.undo_btn.setIcon(self.icons['undo'])
+        self.redo_btn.setIcon(self.icons['redo'])
         self.undo_btn.setEnabled(False)
         self.redo_btn.setEnabled(False)
         
@@ -206,18 +209,19 @@ class BoardUIManager:
         # Create buttons
         self.clear_btn = QPushButton("Clear Board")
         self.flip_btn = QPushButton("Flip Board")
-        self.flip_btn.setIcon(QIcon(self.icons['flip']))
+        self.flip_btn.setIcon(self.icons['flip'])
         self.switch_btn = QPushButton("Switch")
-        self.switch_btn.setIcon(QIcon(self.icons['switch']))
+        self.switch_btn.setIcon(self.icons['switch'])
         self.reset_btn = QPushButton("Set To Opening")
+        self.reset_btn.setIcon(self.icons['opening'])
         self.copy_btn = QPushButton("Copy FEN")
-        self.copy_btn.setIcon(QIcon(self.icons['clip']))
+        self.copy_btn.setIcon(self.icons['clip'])
         self.paste_btn = QPushButton("Paste FEN")
-        self.paste_btn.setIcon(QIcon(self.icons['paste']))
+        self.paste_btn.setIcon(self.icons['paste'])
         self.copy_pgn_btn = QPushButton("Copy PGN")
-        self.copy_pgn_btn.setIcon(QIcon(self.icons['clip']))
+        self.copy_pgn_btn.setIcon(self.icons['clip'])
         self.learn_btn = QPushButton("Learn")
-        self.learn_btn.setIcon(QIcon(self.icons['nn']))
+        self.learn_btn.setIcon(self.icons['nn'])
         
         # Add buttons to layout
         for btn in (self.clear_btn, self.flip_btn, self.switch_btn, self.reset_btn,
@@ -232,6 +236,7 @@ class BoardUIManager:
         
         # State toggle button
         self.state_toggle_btn = QPushButton("Finish Edit")
+        self.state_toggle_btn.setIcon(self.icons['done'])
         self.right_layout.addWidget(self.state_toggle_btn)
         
         # Analysis controls
@@ -254,7 +259,7 @@ class BoardUIManager:
         
         # Main analysis button
         self.analysis_btn = QPushButton("Analysis")
-        self.analysis_btn.setIcon(QIcon(self.icons['engine']))
+        self.analysis_btn.setIcon(self.icons['engine'])
         
         # Dropdown button
         self.engine_dropdown_btn = QPushButton("▼")
