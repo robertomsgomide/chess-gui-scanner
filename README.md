@@ -25,7 +25,7 @@ Capture any chessboard from your screen and analyse it instantly :)
 2. Clone the repository and (optionally) create a virtual environment:
 
 ```bash
-git clone https://github.com/<your-username>/chess-scanner.git
+git clone https://github.com/robertomsgomide/chess-scanner.git
 cd chess-scanner
 
 python -m venv .venv        # optional but recommended
