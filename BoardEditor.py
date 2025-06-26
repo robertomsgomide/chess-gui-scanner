@@ -10,7 +10,7 @@ from HistoryManager import HistoryManager
 from AnalysisManager import AnalysisManager
 from StateController import StateController, BoardState
 from PgnManager import PgnManager
-from PyQt5.QtCore import Qt, QEvent, QSettings
+from PyQt5.QtCore import Qt, QEvent, QSettings, QTimer
 from PyQt5.QtGui import QIcon, QCursor
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QMessageBox, QWhatsThis, QAction, QMenu, 
@@ -88,6 +88,13 @@ class BoardEditor(QDialog):
         
         # Initialize piece memory feature
         self.remembered_piece = None
+        
+        # Timer to handle double-click vs single-click on palette pieces
+        self.palette_click_timer = QTimer()
+        self.palette_click_timer.setSingleShot(True)
+        self.palette_click_timer.timeout.connect(self._process_delayed_palette_click)
+        self.pending_palette_click = None
+        self.double_click_in_progress = False
         
         # En passant state
         self.ep_possible = {}
@@ -210,13 +217,15 @@ class BoardEditor(QDialog):
     # Square event handlers
     def on_square_clicked(self, row, col, button):
         """Handle square click events"""
-        # Left-click on palette piece with remembered piece - clear it
+        # Left-click on palette piece with remembered piece - delay to allow double-click detection
         if (button == Qt.LeftButton and row < 0 and 
-            self.remembered_piece):
-            self.clear_remembered_piece()
+            self.remembered_piece and not self.double_click_in_progress):
+            # Store the click info and start timer
+            self.pending_palette_click = (row, col, button)
+            self.palette_click_timer.start(300)  # 300ms delay
             return
         
-        # Right-click with remembered piece - clear it
+        # Right-click with remembered piece - clear it immediately
         if button == Qt.RightButton and self.remembered_piece:
             self.clear_remembered_piece()
             # Continue to handle right-click for erasing
@@ -225,6 +234,11 @@ class BoardEditor(QDialog):
         if (button == Qt.LeftButton and row >= 0 and 
             self.remembered_piece and 
             self.state_controller.is_edit_mode):
+            # Cancel any pending palette click since we're using the remembered piece
+            if self.palette_click_timer.isActive():
+                self.palette_click_timer.stop()
+                self.pending_palette_click = None
+                
             square = self.ui_manager.squares[row][col]
             square.piece_label = self.remembered_piece
             square.update()
@@ -239,6 +253,14 @@ class BoardEditor(QDialog):
             self.sync_model_to_squares()
             self.refresh_ui_from_model()
     
+    def _process_delayed_palette_click(self):
+        """Process delayed palette click if it wasn't a double-click"""
+        if self.pending_palette_click:
+            row, col, button = self.pending_palette_click
+            # Clear the remembered piece since this was a single click
+            self.clear_remembered_piece()
+            self.pending_palette_click = None
+    
     def on_square_right_clicked(self, row, col):
         """Handle right-click on square"""
         if row >= 0 and self.state_controller.is_edit_mode:
@@ -252,8 +274,19 @@ class BoardEditor(QDialog):
     def on_square_double_clicked(self, row, col):
         """Handle double-click on square"""
         if row < 0:  # Palette piece
+            # Mark that we're processing a double-click
+            self.double_click_in_progress = True
+            
+            # Cancel any pending single-click processing
+            if self.palette_click_timer.isActive():
+                self.palette_click_timer.stop()
+                self.pending_palette_click = None
+            
             square = self.ui_manager.palette_squares[col]
             self.set_remembered_piece(square.piece_label)
+            
+            # Reset the double-click flag after a short delay
+            QTimer.singleShot(100, lambda: setattr(self, 'double_click_in_progress', False))
     
     def on_piece_drag_started(self, row, col, piece_label):
         """Handle start of piece drag"""
@@ -892,6 +925,11 @@ class BoardEditor(QDialog):
     
     def clear_remembered_piece(self):
         """Clear the currently remembered piece"""
+        # Cancel any pending palette click processing
+        if self.palette_click_timer.isActive():
+            self.palette_click_timer.stop()
+            self.pending_palette_click = None
+            
         self.remembered_piece = None
         if QApplication.overrideCursor():
             QApplication.restoreOverrideCursor()

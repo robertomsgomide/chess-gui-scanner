@@ -8,6 +8,7 @@
 *.pt
 *.pkl
 *.json
+*.db
 
 # Ignore Python cache files
 __pycache__/

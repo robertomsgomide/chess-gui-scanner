@@ -2,11 +2,10 @@ import sys
 import os
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtGui import QPalette, QColor, QIcon
-from PyQt5.QtCore import Qt, QSettings
+from PyQt5.QtCore import QSettings
 from labels import initialize_icons, set_dark_mode
 from CNNClassifier import CNNClassifier
 from MainWindow import MainWindow
-from BoardAnalyzer import BoardAnalyzer
 
 
 def set_fusion_dark_theme(app):
@@ -619,11 +618,7 @@ def main():
     # Create a new main window with the loaded or new analyzer
     w = MainWindow(classifier)
     
-    # Load analyzer state if it exists
-    try:
-        w.analyzer = BoardAnalyzer.load_from_disk()
-    except Exception as e:
-        print(f"Error loading analyzer: {e}")
+    # Analyzer is already initialized in MainWindow constructor
     
     w.show()
     sys.exit(app.exec_())

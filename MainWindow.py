@@ -48,7 +48,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.edit_btn)
 
         self.classifier = classifier
-        self.analyzer = BoardAnalyzer()  # New board analyzer
+        # Initialize board analyzer
+        self.analyzer = BoardAnalyzer()
         self.captured_pil = None
         self.detector = AutoDetector()
         self.resize(500,500)

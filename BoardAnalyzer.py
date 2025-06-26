@@ -1,7 +1,7 @@
 import numpy as np
-import os
-import pickle
-from typing import List, Tuple, Dict, Any
+import sqlite3
+import json
+from typing import List, Tuple, Dict, Any, Optional
 
 #########################################
 # Board Analyzer
@@ -13,10 +13,31 @@ class BoardAnalyzer:
     2. Side to move (white's or black's turn)
     
     Uses various heuristics and machine learning to make these determinations.
+    Now uses SQLite for secure, queryable storage instead of pickle files.
     """
-    def __init__(self):
-        # Training data storage
-        self.orientation_data = []  # [(board_matrix, is_flipped_orientation), ...]
+    def __init__(self, db_path: str = "chess_training_data.db"):
+        self.db_path = db_path
+        self._init_database()
+    
+    def _init_database(self):
+        """Initialize database schema for board analyzer data."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Create orientation training table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS orientation_training (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    board_features TEXT NOT NULL,  -- JSON array of features
+                    is_flipped BOOLEAN NOT NULL,
+                    timestamp REAL DEFAULT (julianday('now'))
+                )
+            ''')
+            
+            # Create index for better performance
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_orientation_timestamp ON orientation_training(timestamp)')
+            
+            conn.commit()
     
     def save_training_data(self, labels_2d: List[List[str]], is_flipped: bool):
         """
@@ -29,11 +50,56 @@ class BoardAnalyzer:
         # Convert board to a flat feature vector for training
         board_features = self._board_to_features(labels_2d)
         
-        # Store data for training
-        self.orientation_data.append((board_features, is_flipped))
+        # Store data in database
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO orientation_training (board_features, is_flipped)
+                VALUES (?, ?)
+            ''', (json.dumps(board_features), is_flipped))
+            conn.commit()
+    
+    def get_training_data_count(self) -> int:
+        """Get the count of orientation training examples."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM orientation_training')
+            return cursor.fetchone()[0]
+    
+    def _load_orientation_data(self, limit: Optional[int] = None) -> List[Tuple[List[float], bool]]:
+        """
+        Load orientation training data from database.
         
-        # Save to disk after each training example
-        self.save_to_disk()
+        Args:
+            limit: Maximum number of recent examples to load (None for all)
+            
+        Returns:
+            List of (board_features, is_flipped) tuples
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            if limit:
+                cursor.execute('''
+                    SELECT board_features, is_flipped 
+                    FROM orientation_training 
+                    ORDER BY timestamp DESC 
+                    LIMIT ?
+                ''', (limit,))
+            else:
+                cursor.execute('''
+                    SELECT board_features, is_flipped 
+                    FROM orientation_training 
+                    ORDER BY timestamp DESC
+                ''')
+            
+            results = []
+            for row in cursor.fetchall():
+                features = json.loads(row[0])
+                is_flipped = bool(row[1])
+                results.append((features, is_flipped))
+            
+            return results
     
     def predict_orientation(self, labels_2d: List[List[str]]) -> bool:
         """
@@ -45,9 +111,12 @@ class BoardAnalyzer:
         Returns:
             bool: True if board is likely viewed from black's perspective
         """
+        # Load training data (limit to recent 100 examples for performance)
+        orientation_data = self._load_orientation_data(limit=100)
+        
         return self._predict_with_ml_and_heuristics(
             labels_2d, 
-            self.orientation_data, 
+            orientation_data, 
             self._heuristic_orientation
         )
     
@@ -72,30 +141,73 @@ class BoardAnalyzer:
         """
         return self._heuristic_side_to_move(labels_2d)
     
-    def save_to_disk(self):
-        """Save the analyzer state to a file"""
-        try:
-            with open(self._get_analyzer_path(), 'wb') as f:
-                pickle.dump(self, f)
-        except Exception as e:
-            print(f"Error saving analyzer: {e}")
+    def clear_orientation_data(self):
+        """Clear all orientation training data."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM orientation_training')
+            conn.commit()
     
-    @classmethod
-    def load_from_disk(cls):
-        """Load analyzer state from a file"""
-        analyzer_path = cls._get_analyzer_path()
-        if os.path.exists(analyzer_path):
-            try:
-                with open(analyzer_path, 'rb') as f:
-                    return pickle.load(f)
-            except Exception as e:
-                print(f"Error loading analyzer: {e}")
-        return cls()  # Return a new instance if loading fails
+    def remove_recent_orientation_data(self, count: int = 1) -> int:
+        """
+        Remove the most recent orientation training examples.
+        
+        Args:
+            count: Number of recent examples to remove
+            
+        Returns:
+            Number of examples actually removed
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Get IDs of most recent entries
+            cursor.execute('''
+                SELECT id FROM orientation_training 
+                ORDER BY timestamp DESC 
+                LIMIT ?
+            ''', (count,))
+            
+            ids_to_remove = [row[0] for row in cursor.fetchall()]
+            
+            if ids_to_remove:
+                placeholders = ','.join('?' * len(ids_to_remove))
+                cursor.execute(f'DELETE FROM orientation_training WHERE id IN ({placeholders})', ids_to_remove)
+                conn.commit()
+                return cursor.rowcount
+            
+            return 0
     
-    @staticmethod
-    def _get_analyzer_path() -> str:
-        """Get the path for the analyzer pickle file"""
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "board_analyzer.pkl")
+    def get_orientation_stats(self) -> Dict[str, Any]:
+        """Get statistics about orientation training data."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Total count
+            cursor.execute('SELECT COUNT(*) FROM orientation_training')
+            total = cursor.fetchone()[0]
+            
+            # Flipped vs not flipped
+            cursor.execute('SELECT is_flipped, COUNT(*) FROM orientation_training GROUP BY is_flipped')
+            orientation_counts = dict(cursor.fetchall())
+            
+            # Recent entries
+            cursor.execute('''
+                SELECT timestamp, is_flipped 
+                FROM orientation_training 
+                ORDER BY timestamp DESC 
+                LIMIT 5
+            ''')
+            recent = cursor.fetchall()
+            
+            return {
+                'total': total,
+                'flipped_count': orientation_counts.get(1, 0),
+                'normal_count': orientation_counts.get(0, 0),
+                'recent_entries': recent
+            }
+    
+
     
     def _predict_with_ml_and_heuristics(self, labels_2d: List[List[str]], training_data: List, heuristic_func) -> Any:
         """

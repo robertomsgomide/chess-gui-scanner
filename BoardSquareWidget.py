@@ -50,6 +50,9 @@ class BoardSquareWidget(QWidget):
         self.is_memory_highlighted = False  # For remembered piece highlight
         self.ep_highlight_on = False  # En passant highlight state
         self.ep_possible = {}  # En passant possible squares
+        
+        # For proper drag detection
+        self.drag_start_position = None
     
     def sizeHint(self):
         # Ensure we return exactly our fixed size with no extra margins
@@ -123,6 +126,8 @@ class BoardSquareWidget(QWidget):
     def leaveEvent(self, event):
         """Handle mouse leaving the widget - for cursor highlight"""
         self.set_hover_highlight(False)
+        # Clear drag start position when mouse leaves
+        self.drag_start_position = None
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
@@ -139,42 +144,63 @@ class BoardSquareWidget(QWidget):
             self.squareRightClicked.emit(self.row, self.col)
             return  # stop; no drag on right click
         
-        # Handle drag initiation for left-click
+        # For left-clicks on draggable pieces, just record the start position
+        # Actual drag will start in mouseMoveEvent
         if event.button() == Qt.LeftButton and (self.row < 0 or self.piece_label != "empty"):
-            # Signal that a drag is starting
-            self.pieceDragStarted.emit(self.row, self.col, self.piece_label)
-            
-            # Temporarily clear the piece for visual feedback during drag
-            piece_being_dragged = self.piece_label
-            if self.row >= 0:
-                self.piece_label = "empty"
-                self.update()
+            self.drag_start_position = event.pos()
+    
+    def mouseMoveEvent(self, event):
+        # Only start drag if we have a start position and mouse has moved enough
+        if (self.drag_start_position is not None and 
+            (event.buttons() & Qt.LeftButton) and
+            (event.pos() - self.drag_start_position).manhattanLength() >= 3):  # 3 pixel threshold
+            self._start_drag_operation()
+            self.drag_start_position = None
+        super().mouseMoveEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        # Clear drag start position on release
+        self.drag_start_position = None
+        super().mouseReleaseEvent(event)
+    
+    def _start_drag_operation(self):
+        """Perform the actual drag operation"""
+        # Signal that a drag is starting
+        self.pieceDragStarted.emit(self.row, self.col, self.piece_label)
+        
+        # Temporarily clear the piece for visual feedback during drag
+        piece_being_dragged = self.piece_label
+        if self.row >= 0:
+            self.piece_label = "empty"
+            self.update()
 
-            drag = QDrag(self)
-            mime = QMimeData()
-            mime.setData("application/x-chess-piece",
-                        f"{self.row},{self.col},{piece_being_dragged}".encode())
-            drag.setMimeData(mime)
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData("application/x-chess-piece",
+                    f"{self.row},{self.col},{piece_being_dragged}".encode())
+        drag.setMimeData(mime)
 
-            icon = get_piece_pixmap(piece_being_dragged)
-            drag_pix = QPixmap(icon.size())         # pixmap is just the icon size
-            drag_pix.fill(Qt.transparent)           # keep alpha = 0 everywhere
-            p = QPainter(drag_pix)
-            p.drawPixmap(0, 0, icon)                # no square colour, just the piece
-            p.end()
+        icon = get_piece_pixmap(piece_being_dragged)
+        drag_pix = QPixmap(icon.size())         # pixmap is just the icon size
+        drag_pix.fill(Qt.transparent)           # keep alpha = 0 everywhere
+        p = QPainter(drag_pix)
+        p.drawPixmap(0, 0, icon)                # no square colour, just the piece
+        p.end()
 
-            drag.setPixmap(drag_pix)
-            drag.setHotSpot(drag_pix.rect().center())  # cursor "grabs" the piece centre
-            result = drag.exec_(Qt.MoveAction)
+        drag.setPixmap(drag_pix)
+        drag.setHotSpot(drag_pix.rect().center())  # cursor "grabs" the piece centre
+        result = drag.exec_(Qt.MoveAction)
 
-            # if the drop was rejected / cancelled, restore the piece
-            if result != Qt.MoveAction and self.row >= 0:
-                self.piece_label = piece_being_dragged
-                self.update()
+        # if the drop was rejected / cancelled, restore the piece
+        if result != Qt.MoveAction and self.row >= 0:
+            self.piece_label = piece_being_dragged
+            self.update()
 
     def mouseDoubleClickEvent(self, event):
         """Handle double-click"""
         if event.button() == Qt.LeftButton:
+            # Clear any drag start position since this is a double-click
+            self.drag_start_position = None
             self.squareDoubleClicked.emit(self.row, self.col)
         super().mouseDoubleClickEvent(event)
 
