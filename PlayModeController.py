@@ -34,15 +34,8 @@ class PlayModeController:
     def handle_square_click(self, row: int, col: int):
         """
         Handle square clicks in Play mode for legal moves.
-        
-        Args:
-            row: Display row clicked
-            col: Display column clicked
+        This now correctly handles piece selection, deselection, and move execution.
         """
-        # Clear any existing drag highlights
-        self.clear_drag_highlights()
-        
-        # Convert display coords to algebraic notation
         if self.board_model.is_display_flipped:
             file_idx = 7 - col
             rank_idx = row
@@ -52,62 +45,75 @@ class PlayModeController:
         
         clicked_square = chess.square(file_idx, rank_idx)
         internal_board = self.board_model.get_internal_board()
-        
-        # If no piece selected
-        if self.selected_square is None:
-            piece = internal_board.piece_at(clicked_square)
-            if piece and piece.color == internal_board.turn:
-                # Select this piece
-                self.selected_square = clicked_square
-                
-                # Clear previous highlights
-                self._clear_highlights()
-                
-                # Find and highlight legal moves
-                self.legal_moves = [move for move in internal_board.legal_moves 
-                                  if move.from_square == clicked_square]
-                
-                for move in self.legal_moves:
-                    # Convert to display coords
-                    to_file = chess.square_file(move.to_square)
-                    to_rank = chess.square_rank(move.to_square)
-                    
-                    if self.board_model.is_display_flipped:
-                        disp_row = to_rank
-                        disp_col = 7 - to_file
+
+        # If a piece is already selected
+        if self.selected_square is not None:
+            # Check if the click is on a legal destination square
+            move_to_execute = None
+            for move in self.legal_moves:
+                if move.to_square == clicked_square:
+                    # Found a legal move to the clicked square.
+                    # Handle pawn promotions: if it's a promotion, we prefer the queen.
+                    # A more advanced UI could ask the user, but this is a robust default.
+                    if move.promotion:
+                        if move.promotion == chess.QUEEN:
+                            move_to_execute = move
+                            break  # Queen promotion is the best choice
+                        # Otherwise, store the first promotion option found
+                        if not move_to_execute:
+                            move_to_execute = move
                     else:
-                        disp_row = 7 - to_rank
-                        disp_col = to_file
-                    
-                    self.ui_manager.squares[disp_row][disp_col].set_highlight(True)
-                    self.highlighted_squares.append((disp_row, disp_col))
-        
-        else:
-            # Clear highlights
-            self._clear_highlights()
-            
-            # Check if this is a legal move
-            move = None
-            for legal_move in self.legal_moves:
-                if legal_move.to_square == clicked_square:
-                    # Check for promotion
-                    if (internal_board.piece_at(self.selected_square).piece_type == chess.PAWN and
-                        chess.square_rank(clicked_square) in [0, 7]):
-                        # For simplicity, auto-promote to queen
-                        if legal_move.promotion == chess.QUEEN:
-                            move = legal_move
-                            break
-                    else:
-                        move = legal_move
+                        # This is a non-promotion move (including en passant)
+                        move_to_execute = move
                         break
-            
-            if move:
-                # Make the move
-                self._execute_move(move)
-            
-            # Clear selection
+
+            if move_to_execute:
+                # A legal move was found, so execute it
+                self._clear_highlights()
+                self._execute_move(move_to_execute)
+                self.selected_square = None
+                self.legal_moves = []
+                return
+
+            # If the click was not on a legal destination, it might be on another piece
+            self._clear_highlights()
             self.selected_square = None
             self.legal_moves = []
+            
+            piece_on_clicked_square = internal_board.piece_at(clicked_square)
+            if piece_on_clicked_square and piece_on_clicked_square.color == internal_board.turn:
+                # The user clicked another one of their own pieces, so select that one instead
+                self._select_piece(clicked_square)
+            # Otherwise, the click was on an empty/opponent square, effectively deselecting.
+
+        else:  # No piece is currently selected
+            piece_on_clicked_square = internal_board.piece_at(clicked_square)
+            if piece_on_clicked_square and piece_on_clicked_square.color == internal_board.turn:
+                # Select the clicked piece
+                self._select_piece(clicked_square)
+
+    def _select_piece(self, square: int):
+        """Helper method to select a piece and highlight its legal moves."""
+        self.selected_square = square
+        internal_board = self.board_model.get_internal_board()
+
+        # Clear any previous highlights
+        self._clear_highlights()
+
+        # Get and highlight all legal moves for the selected piece
+        self.legal_moves = [move for move in internal_board.legal_moves if move.from_square == square]
+
+        for move in self.legal_moves:
+            to_file = chess.square_file(move.to_square)
+            to_rank = chess.square_rank(move.to_square)
+
+            if self.board_model.is_display_flipped:
+                disp_row, disp_col = to_rank, 7 - to_file
+            else:
+                disp_row, disp_col = 7 - to_rank, to_file
+            
+            self.ui_manager.squares[disp_row][disp_col].set_highlight(True)
+            self.highlighted_squares.append((disp_row, disp_col))
             
     def start_drag(self, from_row: int, from_col: int) -> bool:
         """

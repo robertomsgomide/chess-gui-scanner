@@ -77,8 +77,8 @@ def set_fusion_dark_theme(app):
         
         /* Buttons with emergency patch colors */
         QPushButton { 
-            background-color: #2d2d2d; 
-            border: 1px solid #393939;
+            background-color: #404040; 
+            border: 1px solid #4a4a4a;
             color: #f0f0f0;
             padding: 10px 16px;
             border-radius: 6px;
@@ -86,11 +86,11 @@ def set_fusion_dark_theme(app):
             font-size: 13px;
         }
         QPushButton:hover { 
-            background-color: #2f2f2f; 
-            border-color: #393939;
+            background-color: #454545; 
+            border-color: #4a4a4a;
         }
         QPushButton:pressed { 
-            background-color: #262626; 
+            background-color: #383838; 
         }
         QPushButton:disabled {
             background-color: #232323;
@@ -103,8 +103,8 @@ def set_fusion_dark_theme(app):
         
         /* Text inputs and text areas */
         QLineEdit, QTextEdit, QPlainTextEdit {
-            background-color: #262626;
-            border: 1px solid #454545;
+            background-color: #404040;
+            border: 1px solid #4a4a4a;
             color: #e0e0e0;
             selection-background-color: #0078d4;
             selection-color: #ffffff;
@@ -133,8 +133,8 @@ def set_fusion_dark_theme(app):
         
         /* Chess board container - raised card for better contrast */
         QFrame[accessibleName="boardContainer"], QWidget[accessibleName="boardContainer"] {
-            background-color: #262626;
-            border: 1px solid #454545;
+            background-color: #404040;
+            border: 1px solid #4a4a4a;
             border-radius: 8px;
         }
         
@@ -142,7 +142,9 @@ def set_fusion_dark_theme(app):
         QFrame[accessibleName="iconPanel"], QWidget[accessibleName="iconPanel"] {
             padding: 4px;
             margin: 2px;
-            background-color: #262626;
+            background-color: #505050;
+            border: 1px solid #606060;
+            border-radius: 6px;
         }
         
         /* Checkboxes and radio buttons */
@@ -157,8 +159,8 @@ def set_fusion_dark_theme(app):
         QCheckBox::indicator, QRadioButton::indicator {
             width: 18px;
             height: 18px;
-            background-color: #262626;
-            border: 2px solid #454545;
+            background-color: #404040;
+            border: 2px solid #4a4a4a;
         }
         QCheckBox::indicator {
             border-radius: 4px;
@@ -217,9 +219,9 @@ def set_fusion_dark_theme(app):
         
         /* Menu bars and menus */
         QMenuBar {
-            background-color: #2d2d2d;
+            background-color: #404040;
             color: #e0e0e0;
-            border-bottom: 1px solid #454545;
+            border-bottom: 1px solid #4a4a4a;
             padding: 2px;
             font-weight: 500;
         }
@@ -231,9 +233,9 @@ def set_fusion_dark_theme(app):
             background-color: #383838;
         }
         QMenu {
-            background-color: #2d2d2d;
+            background-color: #404040;
             color: #e0e0e0;
-            border: 1px solid #454545;
+            border: 1px solid #4a4a4a;
             border-radius: 8px;
             padding: 4px;
         }
@@ -257,7 +259,7 @@ def set_fusion_dark_theme(app):
             font-weight: 500;
             font-size: 14px;
             color: #e0e0e0;
-            border: 1px solid #454545;
+            border: 1px solid #4a4a4a;
             border-radius: 8px;
             margin: 8px 0px;
             padding-top: 12px;
@@ -271,10 +273,10 @@ def set_fusion_dark_theme(app):
         
         /* Table and list widgets for better contrast */
         QTableWidget, QListWidget, QTreeWidget {
-            background-color: #262626;
-            alternate-background-color: #2a2a2a;
+            background-color: #404040;
+            alternate-background-color: #454545;
             color: #e0e0e0;
-            border: 1px solid #454545;
+            border: 1px solid #4a4a4a;
             border-radius: 6px;
         }
         QTableWidget::item, QListWidget::item, QTreeWidget::item {
@@ -288,9 +290,9 @@ def set_fusion_dark_theme(app):
         
         /* Headers */
         QHeaderView::section {
-            background-color: #2d2d2d;
+            background-color: #404040;
             color: #e0e0e0;
-            border: 1px solid #454545;
+            border: 1px solid #4a4a4a;
             padding: 6px;
             font-weight: 500;
         }
@@ -610,8 +612,8 @@ def main():
         show_terms_dialog()
     
     # Choose one of these themes (comment out the other)
-    # set_fusion_dark_theme(app)    # Modern dark theme (VS Code Dark+ style)
-    set_fusion_light_theme(app)     # Modern light theme (Material 3 / macOS Sonoma style)
+    set_fusion_dark_theme(app)    # Modern dark theme (VS Code Dark+ style)
+    #set_fusion_light_theme(app)     # Modern light theme (Material 3 / macOS Sonoma style)
     
     classifier = CNNClassifier()
     

@@ -29,7 +29,7 @@ class BoardEditor(QDialog):
     """
     def __init__(self, labels_2d, predicted_side_to_move='w'):
         super().__init__()
-        self.setWindowTitle("Chess Viewer")
+        self.setWindowTitle("Chessboard Editor")
         self.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.CustomizeWindowHint |
                             Qt.WindowCloseButtonHint | Qt.WindowContextHelpButtonHint)
         
@@ -354,6 +354,8 @@ class BoardEditor(QDialog):
 
     def refresh_ui_from_model(self):
         """Refresh UI elements from the current board model state"""
+        if self.state_controller.is_play_mode:
+            return
         self.refresh_castling_checkboxes()
         self.refresh_en_passant()
         
@@ -592,19 +594,6 @@ class BoardEditor(QDialog):
         for widget in self.ui_manager.analysis_line_widgets:
             widget.hide()
         
-        # In Edit mode, sync current state to model and update UI state
-        if self.state_controller.is_edit_mode:
-            self.sync_squares_to_model()
-            
-            # Update board model with current UI state
-            self.board_model.set_side_to_move(self.get_side_to_move())
-            castling_rights = self.get_castling_rights()
-            self.board_model.set_castling_rights(castling_rights)
-            if hasattr(self, 'ep_selected') and self.ep_selected:
-                self.board_model.set_en_passant_square(self.ep_selected)
-            else:
-                self.board_model.set_en_passant_square(None)
-        
         # Run analysis
         success = self.analysis_manager.analyze_position(self.board_model)
         
@@ -792,12 +781,6 @@ class BoardEditor(QDialog):
 
     def refresh_en_passant(self):
         """Re-evaluate EP candidates and update UI"""
-        # First clear any existing highlights
-        if self.ep_highlight_on:
-            for (r,c) in self.ep_possible:
-                self.ui_manager.squares[r][c].set_highlight(False)
-            self.ep_highlight_on = False
-            
         # Get en passant targets from the model
         self.ep_possible = self.board_model.get_en_passant_targets()
         ok = self.board_model.has_en_passant_candidates()
@@ -825,22 +808,26 @@ class BoardEditor(QDialog):
     def on_ep_toggled(self, state):
         """User ticked/unticked the EP box."""
         checked = state == Qt.Checked
-        # clear any previous highlight
-        for (r,c) in self.ep_possible:
-            self.ui_manager.squares[r][c].set_highlight(False)
-        self.ep_highlight_on = False
+        
+        # Always clear existing highlights when the checkbox state changes
+        if self.ep_highlight_on:
+            for (r,c) in self.ep_possible:
+                self.ui_manager.squares[r][c].set_highlight(False)
+            self.ep_highlight_on = False
+
         if checked:
+            # If checking the box, re-highlight possible squares
             for (r, c) in self.ep_possible:
                 self.ui_manager.squares[r][c].set_highlight(True)
             self.ep_highlight_on = True
-            self.ep_selected = None
         else:
+            # If unchecking, this is an explicit cancellation of the EP state.
             self.ep_selected = None
-            
-        # Update en passant state for all squares
+
+        # Update square states
         for row in self.ui_manager.squares:
             for square in row:
-                square.set_ep_state(False, {})
+                square.set_ep_state(self.ep_highlight_on, self.ep_possible)
 
     def on_ep_square_clicked(self, row, col):
         """User chose which EP target square goes into the FEN."""
@@ -850,21 +837,15 @@ class BoardEditor(QDialog):
         # remember the algebraic square (e.g. "g6")
         self.ep_selected = self.ep_possible[(row, col)]
 
-        # turn OFF highlights
+        # turn OFF highlights as the selection is now made
         for (r, c) in list(self.ep_possible):
             self.ui_manager.squares[r][c].set_highlight(False)
         self.ep_highlight_on = False
-        self.ep_possible.clear()
-
-        # keep the check‑box ticked (block signals to avoid re‑entry)
-        ui = self.ui_manager
-        ui.ep_cb.blockSignals(True)
-        ui.ep_cb.setChecked(True)
-        ui.ep_cb.blockSignals(False)
         
-        # Update en passant state for all squares
-        for row in self.ui_manager.squares:
-            for square in row:
+        # The checkbox remains checked to indicate that an EP square is set.
+        # Update square states to remove highlight reactivity.
+        for row_widget in self.ui_manager.squares:
+            for square in row_widget:
                 square.set_ep_state(False, {})
 
     def get_ep_field(self):
@@ -986,7 +967,6 @@ class BoardEditor(QDialog):
         """Handle state toggle button click"""
         if self.state_controller.is_edit_mode:
             # Transitioning to Play mode - sync ALL UI state before validation
-            self.sync_squares_to_model()
             
             # Update board model with current UI state
             self.board_model.set_side_to_move(self.get_side_to_move())
@@ -1025,6 +1005,11 @@ class BoardEditor(QDialog):
         # Update move list display if entering play mode
         if new_state == BoardState.PLAY:
             self.update_move_list_display()
+            self.setWindowTitle("Chessboard Analyzer")
+        else:
+            self.sync_squares_to_model()
+            self.refresh_ui_from_model()
+            self.setWindowTitle("Chessboard Editor")
     
     def update_move_list_display(self):
         """Update the move list text display"""

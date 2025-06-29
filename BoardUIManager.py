@@ -4,10 +4,8 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout,
     QCheckBox, QRadioButton, QButtonGroup, QWidget, QSizePolicy,
-    QTextEdit, QScrollArea, QAction
+    QTextEdit
 )
-from BoardSquareWidget import BoardSquareWidget
-from labels import PIECE_LABELS
 
 class BoardUIManager:
     """
@@ -192,10 +190,22 @@ class BoardUIManager:
         self.palette_container = QWidget()
         palette_layout = QHBoxLayout(self.palette_container)
         palette_layout.setSpacing(0)
-        palette_layout.setContentsMargins(0, 0, 0, 0)
-        self.palette_container.setStyleSheet("padding: 0px; margin: 0px; border: 0px; spacing: 0px;")
+        # Add a small horizontal padding so rounded corners remain visible
+        palette_layout.setContentsMargins(4, 2, 4, 2)
+        # Apply grey background and border to clearly delimit the palette region
+        self.palette_container.setStyleSheet(
+            "padding: 0px; margin: 0px; spacing: 0px; "
+            "background-color: #505050; "
+            "border: 1px solid #606060; "
+            "border-radius: 8px;"
+        )
         
-        self.left_layout.addWidget(self.palette_container)
+        # Ensure the stylesheet background and border (with rounded corners) are actually painted
+        self.palette_container.setAttribute(Qt.WA_StyledBackground, True)
+        
+        # Add palette container aligned to the left so its background doesn't stretch across the whole row
+        self.palette_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.left_layout.addWidget(self.palette_container, alignment=Qt.AlignLeft)
         
         # Palette squares will be created by BoardEditor
         self.palette_squares = []
@@ -367,4 +377,5 @@ class BoardUIManager:
         
     def finalize_palette(self):
         """Add stretch to palette after all squares are added"""
-        self.palette_layout.addStretch() 
+        # No stretch: keep container just wide enough for the palette squares
+        self.palette_container.adjustSize() 

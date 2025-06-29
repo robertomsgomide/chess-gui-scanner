@@ -97,6 +97,12 @@ class EditorStateManager:
                 if square:
                     square.setAcceptDrops(True)
                     
+        # Recalculate and adjust the parent dialog size after hiding/showing widgets
+        if self.ui_manager.parent is not None:
+            parent = self.ui_manager.parent
+            parent.setMinimumSize(parent.sizeHint())
+            parent.resize(parent.sizeHint())
+        
     def apply_play_state_ui(self):
         """Apply UI changes for Play state - hide editing controls, show play controls"""
         ui = self.ui_manager
@@ -152,4 +158,10 @@ class EditorStateManager:
         for row in ui.squares:
             for square in row:
                 if square:
-                    square.setAcceptDrops(True) 
+                    square.setAcceptDrops(True)
+                    
+        # Recalculate and adjust the parent dialog size after hiding/showing widgets
+        if self.ui_manager.parent is not None:
+            parent = self.ui_manager.parent
+            parent.setMinimumSize(parent.sizeHint())
+            parent.resize(parent.sizeHint()) 

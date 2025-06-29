@@ -1,7 +1,6 @@
 import chess
 from typing import List, Tuple, Optional, Dict
 from labels import labels_to_fen
-
 #########################################
 # ChessBoardModel.py
 #########################################
@@ -194,50 +193,74 @@ class ChessBoardModel:
         def alg(r, c): 
             return "abcdefgh"[c] + str(8 - r)
 
-        # In chess, en passant is only possible on the 3rd rank (for white) or 6th rank (for black)
         if side == 'w':  # White to move
-            # Check for possible en passant targets on the 6th rank (3rd rank from white's perspective)
-            # This is where a black pawn might have just moved two squares forward
-            enpassant_rank = 2  # Target rank in the array (6th rank)
-            pawn_rank = 3      # Where the black pawn would be
+            enpassant_rank = 2  # Target rank (6th rank)
+            pawn_rank = 3      # Where the black pawn is (5th rank)
             
             for col in range(8):
                 # Check if there's a black pawn on the 5th rank
                 if standard_labels[pawn_rank][col] == "bp":
+                    
                     # Check if there are white pawns on either side that could capture
                     for dcol in [-1, 1]:
                         if 0 <= col + dcol < 8 and standard_labels[pawn_rank][col + dcol] == "wp":
-                            # Found a potential en passant situation
-                            # The en passant target is on the 6th rank, same file as the black pawn
+                            # Found potential en passant - now validate with python-chess
+                            pawn_square = alg(pawn_rank, col + dcol)
+                            target_square = alg(enpassant_rank, col)
+                            ep_move = chess.Move.from_uci(pawn_square+target_square)
+                            # Create temporary FEN with this en passant target
+                            current_fen = self._board.fen()
+                            fen_parts = current_fen.split()
+                            fen_parts[3] = target_square  # Set en passant field
+                            test_fen = " ".join(fen_parts)
+                            
+                            # Test if python-chess would accept the en passant move
+                            
+                            test_board = chess.Board(test_fen)
+
+                            # If the FEN is invalid, clear targets and stop
+                            if not test_board.is_legal(ep_move) or not test_board.is_valid():
+                                break
+                            
+                            # If we get here, the en passant is valid
                             trg_r, trg_c = enpassant_rank, col
-                            # Convert to display coordinates
                             if self.is_display_flipped:
                                 disp_r, disp_c = 7 - trg_r, 7 - trg_c
                             else:
                                 disp_r, disp_c = trg_r, trg_c
-                            targets[(disp_r, disp_c)] = alg(trg_r, trg_c)
-                            
-        else:  # Black to move
-            # Check for possible en passant targets on the 3rd rank (6th rank from black's perspective)
-            # This is where a white pawn might have just moved two squares forward
-            enpassant_rank = 5  # Target rank in the array (3rd rank)
-            pawn_rank = 4      # Where the white pawn would be
+                            targets[(disp_r, disp_c)] = target_square
+                            break  # One target per pawn
+                                
+        else:  # Black to move (same logic)
+            enpassant_rank = 5  # Target rank (3rd rank)
+            pawn_rank = 4      # Where the white pawn is (4th rank) 
             
             for col in range(8):
-                # Check if there's a white pawn on the 4th rank
                 if standard_labels[pawn_rank][col] == "wp":
-                    # Check if there are black pawns on either side that could capture
+                                       
                     for dcol in [-1, 1]:
                         if 0 <= col + dcol < 8 and standard_labels[pawn_rank][col + dcol] == "bp":
-                            # Found a potential en passant situation
-                            # The en passant target is on the 3rd rank, same file as the white pawn
+                            pawn_square = alg(pawn_rank, col + dcol)
+                            target_square = alg(enpassant_rank, col)
+                            ep_move = chess.Move.from_uci(pawn_square+target_square)
+                            current_fen = self._board.fen()
+                            fen_parts = current_fen.split()
+                            fen_parts[3] = target_square
+                            test_fen = " ".join(fen_parts)
+                            
+                            test_board = chess.Board(test_fen)
+                            
+                            # If the FEN is invalid, clear targets and stop
+                            if not test_board.is_legal(ep_move) or not test_board.is_valid():
+                                break
+                            
                             trg_r, trg_c = enpassant_rank, col
-                            # Convert to display coordinates
                             if self.is_display_flipped:
                                 disp_r, disp_c = 7 - trg_r, 7 - trg_c
                             else:
                                 disp_r, disp_c = trg_r, trg_c
-                            targets[(disp_r, disp_c)] = alg(trg_r, trg_c)
+                            targets[(disp_r, disp_c)] = target_square
+                            break
 
         return targets
     

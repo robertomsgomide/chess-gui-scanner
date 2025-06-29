@@ -78,6 +78,7 @@ class BoardSquareWidget(QWidget):
         """Set en passant highlighting state"""
         self.ep_highlight_on = highlight_on
         self.ep_possible = possible_squares
+        self.update()
 
     def paintEvent(self, event):
         p = QPainter(self)
