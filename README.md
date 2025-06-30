@@ -9,12 +9,11 @@ Capture any chessboard from your screen and analyse it instantly :)
 
 • Screen overlay with 8×8 grid for pixel-perfect selection  
 • Lightweight CNN recognizes every square (~0.9 M parameters)  
-• Smart heuristics predict board orientation and side-to-move  
+• Continuous learning – every manual correction can be stored as training data
 • Feature-rich editor with drag-and-drop, undo/redo, and position validation  
 • Edit and Play modes with move recording and PGN export  
-• UCI engine integration (Stockfish, Berserk, etc.) with navigable analysis lines  
-• Continuous learning – every manual correction can be stored as training data  
-• Works on Windows, Linux and macOS – **no internet connection required**
+• UCI engine integration (Stockfish, lc0, etc.) with navigable analysis lines   
+• Works on Windows, Linux and macOS
 
 ---
 
@@ -24,7 +23,7 @@ Capture any chessboard from your screen and analyse it instantly :)
 2. Clone the repository and (optionally) create a virtual environment:
 
 ```bash
-git clone https://github.com/robertomsgomide/chess-scanner.git
+git clone https://github.com/robertomsgomide/chess-gui-scanner.git
 cd chess-scanner
 
 python -m venv .venv        # optional but recommended
@@ -54,37 +53,28 @@ python main.py
 2. Verify / correct the automatically recognized position in Edit mode.
 3. Click **Finish Edit** to enter Play mode for making moves, or use **Analysis** to examine the position with an engine.
 
-### Keyboard shortcuts
-
-| Key | Action |
-|-----|--------|
-| Esc | Cancel capture / close dialog |
-| R   | Re-capture board |
-| Ctrl&nbsp;+&nbsp;S | Copy FEN to clipboard |
-| Space | Start / stop engine |
-
----
 
 ## Project layout
 
 ```
 chess-scanner/
-├─ main.py               # Entry point
-├─ MainWindow.py         # Main application window
-├─ BoardEditor.py        # Position editor and play interface
-├─ ChessBoardModel.py    # Core board state management
-├─ StateController.py    # Edit/Play mode management
-├─ AnalysisManager.py    # Engine analysis and navigation
-├─ HistoryManager.py     # Undo/redo functionality
-├─ PgnManager.py         # Move recording and PGN export
-├─ CNNClassifier.py      # PyTorch piece classifier
-├─ BoardAnalyzer.py      # Heuristic orientation predictor
-├─ SnipOverlay.py        # Full-screen capture overlay
-├─ AutoDetector.py       # Automatic board detection
-├─ BoardSquareWidget.py  # Individual square widgets
-├─ labels.py             # Piece definitions and utilities
-├─ engine/               # Place UCI engines here
-└─ icons/                # Piece bitmaps
+├─ main.py                    # Entry point
+├─ MainWindow.py              # Main application window
+├─ BoardEditor.py             # Position editor and play interface
+├─ ChessBoardModel.py         # Core board state management
+├─ StateController.py         # Edit/Play mode management
+├─ AnalysisManager.py         # Engine analysis and navigation
+├─ HistoryManager.py          # Undo/redo functionality
+├─ PgnManager.py              # Move recording and PGN export
+├─ CNNClassifier.py           # PyTorch piece classifier
+├─ BoardAnalyzer.py           # Heuristic orientation predictor
+├─ SnipOverlay.py             # Full-screen capture overlay
+├─ AutoDetector.py            # Automatic board detection
+├─ BoardSquareWidget.py       # Individual square widgets
+├─ restore_training_data.py   # Helper script to manage all chess training data
+├─ labels.py                  # Piece definitions and utilities
+├─ engine/                    # Place UCI engines here
+└─ icons/                     # Piece bitmaps
 ```
 
 ---
@@ -98,12 +88,6 @@ chess-scanner/
 • numpy — feature extraction  
 • pyautogui — cross-platform screen-capture helper  
 • OpenCV — automatic board detection and image processing
-
----
-
-## Contributing
-
-Pull requests are welcome! For larger changes, please open an issue first to discuss what you would like to change.
 
 ---
 
