@@ -781,6 +781,12 @@ class BoardEditor(QDialog):
 
     def refresh_en_passant(self):
         """Re-evaluate EP candidates and update UI"""
+        # FIRST: Clear any existing en passant highlights
+        if hasattr(self, 'ep_possible') and self.ep_possible:
+            for (r, c) in self.ep_possible:
+                self.ui_manager.squares[r][c].set_highlight(False)
+        self.ep_highlight_on = False
+        
         # Get en passant targets from the model
         self.ep_possible = self.board_model.get_en_passant_targets()
         ok = bool(self.ep_possible)
@@ -804,7 +810,7 @@ class BoardEditor(QDialog):
         for row in self.ui_manager.squares:
             for square in row:
                 square.set_ep_state(self.ep_highlight_on, self.ep_possible)
-
+                
     def on_ep_toggled(self, state):
         """User ticked/unticked the EP box."""
         checked = state == Qt.Checked
