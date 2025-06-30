@@ -81,6 +81,9 @@ class EditorStateManager:
             analysis_container.hide()
         ui.reset_analysis_btn.hide()
         
+        # Hide analysis display area
+        ui.analysis_view_container.hide()
+        
         # Hide Copy PGN button (will be shown in Play mode)
         ui.copy_pgn_btn.hide()
         
@@ -146,6 +149,9 @@ class EditorStateManager:
         if analysis_container:
             analysis_container.show()
         ui.reset_analysis_btn.show()
+        
+        # Show analysis display area
+        ui.analysis_view_container.show()
         
         # Hide palette
         if ui.palette_container:

@@ -1005,6 +1005,13 @@ class BoardEditor(QDialog):
         # Clear any play mode selection state
         self.play_mode_controller.clear_selection()
         
+        # Clear analysis when transitioning to Edit mode
+        if new_state == BoardState.EDIT:
+            self.analysis_manager.clear_analysis()
+            # Update the analysis display to reflect cleared state
+            if self.analysis_manager.update_display_callback:
+                self.analysis_manager.update_display_callback()
+        
         # Apply UI state changes
         self.editor_state_manager.handle_state_change(new_state)
         
