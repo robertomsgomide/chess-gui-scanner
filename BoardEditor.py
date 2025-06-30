@@ -783,7 +783,7 @@ class BoardEditor(QDialog):
         """Re-evaluate EP candidates and update UI"""
         # Get en passant targets from the model
         self.ep_possible = self.board_model.get_en_passant_targets()
-        ok = self.board_model.has_en_passant_candidates()
+        ok = bool(self.ep_possible)
 
         ui = self.ui_manager
         ui.ep_cb.blockSignals(True)

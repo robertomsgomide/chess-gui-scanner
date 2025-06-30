@@ -264,21 +264,7 @@ class ChessBoardModel:
 
         return targets
     
-    def has_en_passant_candidates(self) -> bool:
-        """Check if there are legal en passant captures possible"""
-        targets = self.get_en_passant_targets()
-        if not targets:
-            return False
-            
-        # Additional check: make sure the king is not in check when en passant field is set to "-"
-        # This prevents en passant in positions where it would be illegal due to check
-        try:
-            # Create a temporary board with no en passant to check for check
-            temp_board = self._board.copy()
-            temp_board.ep_square = None
-            return not temp_board.is_check()
-        except:
-            return bool(targets)
+
     
     def set_en_passant_square(self, square_name: Optional[str]):
         """Set en passant target square"""
