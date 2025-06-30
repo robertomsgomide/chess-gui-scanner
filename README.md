@@ -3,8 +3,7 @@
 
 Capture any chessboard from your screen and analyse it instantly :)
 
-
-![Demo screenshot](https://github.com/user-attachments/assets/ee66a5ea-194d-4cfd-a25f-23cf86c1842f)
+![Demo](https://github.com/user-attachments/assets/a0373e94-41f5-4d65-a2ac-5773d0d7ab07)
 
 ## Highlights
 
