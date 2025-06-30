@@ -1,4 +1,4 @@
-# chess-scanner
+# chess-gui-scanner
 
 
 Capture any chessboard from your screen and analyse it instantly :)
