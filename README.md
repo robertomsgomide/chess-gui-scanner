@@ -9,7 +9,7 @@ Capture any chessboard from your screen and analyse it instantly :)
 
 • Screen overlay with 8×8 grid for pixel-perfect selection  
 • Lightweight CNN recognizes every square (~0.9 M parameters)  
-• Continuous learning – every manual correction can be stored as training data
+• Continuous learning – every manual correction can be stored as training data  
 • Feature-rich editor with drag-and-drop, undo/redo, and position validation  
 • Edit and Play modes with move recording and PGN export  
 • UCI engine integration (Stockfish, lc0, etc.) with navigable analysis lines   
@@ -24,7 +24,7 @@ Capture any chessboard from your screen and analyse it instantly :)
 
 ```bash
 git clone https://github.com/robertomsgomide/chess-gui-scanner.git
-cd chess-scanner
+cd chess-gui-scanner
 
 python -m venv .venv        # optional but recommended
 # Windows
@@ -57,7 +57,7 @@ python main.py
 ## Project layout
 
 ```
-chess-scanner/
+chess-gui-scanner/
 ├─ main.py                    # Entry point
 ├─ MainWindow.py              # Main application window
 ├─ BoardEditor.py             # Position editor and play interface
